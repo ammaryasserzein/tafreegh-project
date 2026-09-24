@@ -11,6 +11,7 @@ Validates:
 import re
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -46,37 +47,51 @@ REQUIRED_STANDARDS_SECTIONS = [
     "Verifiable Completion Criteria",
 ]
 
+class FindingCategory(str, Enum):
+    DIR = "DIR"
+    SCRATCH = "SCRATCH"
+    PHRASING = "PHRASING"
+    CONTEXT = "CONTEXT"
+    TABLE = "TABLE"
+    STANDARDS = "STANDARDS"
+
 @dataclass
 class Finding:
-    category: str
+    category: FindingCategory
     message: str
     file_path: str = ""
     line_number: int = 0
 
     def __str__(self) -> str:
-        location = f"{self.file_path}:{self.line_number} " if self.file_path else ""
-        return f"[{self.category}] {location}{self.message}"
+        category_name = self.category.value if isinstance(self.category, FindingCategory) else str(self.category)
+        if self.file_path and self.line_number > 0:
+            location = f"{self.file_path}:{self.line_number} "
+        elif self.file_path:
+            location = f"{self.file_path} "
+        else:
+            location = ""
+        return f"[{category_name}] {location}{self.message}"
 
-def check_directories(findings: list[Finding]) -> None:
+def check_directories(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     for dir_name in STANDARD_DIRS:
-        target_path = REPO_ROOT / dir_name
+        target_path = base_dir / dir_name
         if not target_path.is_dir():
-            findings.append(Finding(category="DIR", message=f"Missing standard directory: {dir_name}"))
+            findings.append(Finding(category=FindingCategory.DIR, message=f"Missing standard directory: {dir_name}"))
 
-def check_scratch_cleanliness(findings: list[Finding]) -> None:
-    for candidate_file in REPO_ROOT.iterdir():
+def check_scratch_cleanliness(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
+    for candidate_file in base_dir.iterdir():
         if candidate_file.is_file():
             for pattern in FORBIDDEN_ROOT_PATTERNS:
                 if pattern.match(candidate_file.name):
                     findings.append(Finding(
-                        category="SCRATCH",
+                        category=FindingCategory.SCRATCH,
                         message=f"Root-level scratch file found: {candidate_file.name}. Move to .scratch/ or $env:TEMP",
                         file_path=candidate_file.name
                     ))
 
-def check_steering_docs_phrasing(findings: list[Finding]) -> None:
+def check_steering_docs_phrasing(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     for doc_name in STEERING_DOCS:
-        target_doc = REPO_ROOT / doc_name
+        target_doc = base_dir / doc_name
         if not target_doc.is_file():
             continue
         lines = target_doc.read_text(encoding="utf-8").splitlines()
@@ -84,16 +99,16 @@ def check_steering_docs_phrasing(findings: list[Finding]) -> None:
             for pattern in NEGATIVE_PHRASING_PATTERNS:
                 if pattern.search(line_content):
                     findings.append(Finding(
-                        category="PHRASING",
+                        category=FindingCategory.PHRASING,
                         message=f"Negative phrasing matched '{pattern.pattern}': {line_content.strip()[:60]}",
                         file_path=doc_name,
                         line_number=line_number
                     ))
 
-def check_context_integrity(findings: list[Finding]) -> None:
-    context_file = REPO_ROOT / "CONTEXT.md"
+def check_context_integrity(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
+    context_file = base_dir / "CONTEXT.md"
     if not context_file.is_file():
-        findings.append(Finding(category="CONTEXT", message="Missing CONTEXT.md in repository root."))
+        findings.append(Finding(category=FindingCategory.CONTEXT, message="Missing CONTEXT.md in repository root."))
         return
 
     content = context_file.read_text(encoding="utf-8")
@@ -103,7 +118,7 @@ def check_context_integrity(findings: list[Finding]) -> None:
         dir_reference = match.group(1)
         if dir_reference not in STANDARD_DIRS:
             findings.append(Finding(
-                category="CONTEXT",
+                category=FindingCategory.CONTEXT,
                 message=f"Invalid folder reference in CONTEXT.md: `{dir_reference}`",
                 file_path="CONTEXT.md"
             ))
@@ -116,14 +131,14 @@ def check_context_integrity(findings: list[Finding]) -> None:
         stripped_line = line_content.strip()
         if stripped_line.startswith("|") and stripped_line.endswith("|"):
             # Split strictly on unescaped pipe characters
-            cells = [c.strip() for c in re.split(r"(?<!\\)\|", stripped_line)[1:-1]]
+            cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", stripped_line)[1:-1]]
             if not in_table:
                 in_table = True
                 expected_column_count = len(cells)
             else:
                 if len(cells) != expected_column_count:
                     findings.append(Finding(
-                        category="TABLE",
+                        category=FindingCategory.TABLE,
                         message=f"Table column count mismatch: expected {expected_column_count}, got {len(cells)}",
                         file_path="CONTEXT.md",
                         line_number=line_number
@@ -131,29 +146,32 @@ def check_context_integrity(findings: list[Finding]) -> None:
         else:
             in_table = False
 
-def check_coding_standards(findings: list[Finding]) -> None:
-    standards_file = REPO_ROOT / "CODING_STANDARDS.md"
+def check_coding_standards(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
+    standards_file = base_dir / "CODING_STANDARDS.md"
     if not standards_file.is_file():
-        findings.append(Finding(category="STANDARDS", message="Missing CODING_STANDARDS.md in repository root."))
+        findings.append(Finding(category=FindingCategory.STANDARDS, message="Missing CODING_STANDARDS.md in repository root."))
         return
 
     text_content = standards_file.read_text(encoding="utf-8")
     for section_heading in REQUIRED_STANDARDS_SECTIONS:
         if section_heading not in text_content:
             findings.append(Finding(
-                category="STANDARDS",
+                category=FindingCategory.STANDARDS,
                 message=f"CODING_STANDARDS.md missing required section: '{section_heading}'",
                 file_path="CODING_STANDARDS.md"
             ))
 
-def main() -> None:
+def run_all_checks(base_dir: Path = REPO_ROOT) -> list[Finding]:
     findings: list[Finding] = []
-    check_directories(findings)
-    check_scratch_cleanliness(findings)
-    check_steering_docs_phrasing(findings)
-    check_context_integrity(findings)
-    check_coding_standards(findings)
+    check_directories(findings, base_dir=base_dir)
+    check_scratch_cleanliness(findings, base_dir=base_dir)
+    check_steering_docs_phrasing(findings, base_dir=base_dir)
+    check_context_integrity(findings, base_dir=base_dir)
+    check_coding_standards(findings, base_dir=base_dir)
+    return findings
 
+def main() -> None:
+    findings = run_all_checks()
     if findings:
         print(f"FAILED: {len(findings)} repository verification finding(s) detected:")
         for item in findings:

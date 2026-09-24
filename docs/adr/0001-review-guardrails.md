@@ -17,4 +17,3 @@ During the `CONTEXT.md` refactoring, 9 code-review rounds were consumed by recur
 
 - Mechanical errors are caught instantly by automated scripts before code review, preventing multi-round reviewer thrashing.
 - Changes touching files outside the declared task scope fail review immediately.
-- Verification scripts must remain maintained and executable across environments.
