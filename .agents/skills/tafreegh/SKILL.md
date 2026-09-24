@@ -128,8 +128,8 @@ Execute exclusively when `<matn_source>` is absent:
 6. **Interruption During Matn Reading**:
    - If a student interrupts while the Sheikh is actively reading the Matn:
      Close Matn bracket: `)**` -> New line -> `طالب: ... ؟` -> New line -> Re-open Matn and resume: `**(تكملة المتن...)`.
-7. **Environmental Sounds**:
-   - Ignore all non-student environmental sounds (audio cuts, phone ringing, background noise, etc.). Only student speech warrants attribution and formatting.
+7. **Speech Exclusivity**:
+   - Attribute and format human vocal speech exclusively.
 
 ---
 
