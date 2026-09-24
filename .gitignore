@@ -1,0 +1,18 @@
+# Node & Dependencies
+node_modules/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Scratch & Review artifacts
+.scratch/
+*.diff
+*.patch
+diff*.txt
+scratch*.txt
+context_log.txt
+new_context.md
+old_context.md

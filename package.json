@@ -1,0 +1,14 @@
+{
+  "name": "tafreegh-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Arabic transcription and proofreading pipeline",
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.1",
+    "prettier": "^3.9.9"
+  }
+}
