@@ -1,0 +1,6 @@
+01_Matn_Sources/
+02_Raw_Inputs/
+03_AI_Outputs/
+04_Training_Data/
+node_modules/
+.scratch/

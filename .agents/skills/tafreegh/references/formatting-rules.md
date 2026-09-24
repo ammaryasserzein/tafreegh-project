@@ -1,23 +1,26 @@
 # Formatting Standards, Orthography & Microsoft Word Integration
 
 ## 1. Zero-Spacing Rule (Parentheses & Punctuation Attachment)
+
 - All brackets, parentheses, and quotation marks must tightly hug internal text with zero whitespace:
   - Correct: `**(نص المتن)**` and `(آية)` and `"حديث"`
   - Prohibited: `**( نص المتن )**` or `( آية )`
 - This zero-spacing constraint strictly applies across all Arabic brackets, Quranic marks, and quote marks.
 
 ## 2. Microsoft Word Compatibility
-- **Bold Tagging**: Enclose Matn occurrences in double asterisks and parentheses: `**(نص المتن)**`. Microsoft Word automatically parses markdown bold when pasted from modern clipboards, rendering it as native bold.
+
+- **Bold Tagging (Standalone vs Inline)**: Standalone Matn occurrences read from the book are placed on their own isolated lines enclosed in double asterisks and parentheses: `**(نص المتن)**`. Microsoft Word automatically parses markdown bold when pasted from modern clipboards. Conversely, when the Sheikh cites or repeats a Matn phrase inline within his ongoing explanation, enclose it in plain parentheses `(نص المتن)` without bold asterisks.
 - **Paragraph Spacing**: Separate distinct paragraphs with an empty line (double newline). This ensures Word lays out paragraphs with clean, balanced spacing without overlapping.
 - **Arabic Punctuation Only**: Exclusively use Arabic marks `(، . : ؟ !)`. Never output English punctuation or brackets `{}` / `[]`.
 - **Absolute Ban on Ellipsis (`...`)**: Never insert consecutive dots or ellipsis (`...`, `..`) to denote vocal pauses, trailing phrases, or spoken hesitations. Translate all hesitations and pause intervals into natural Arabic commas `،` or appropriate terminal punctuation (`.`, `؟`), ensuring clean, professional typography for Microsoft Word.
 - **Extreme Matn Punctuation Strategy**: Preserve the punctuation of the Matn source as-is without stripping punctuation before closing parentheses (e.g., `،)`). This prevents cognitive conflict with the absolute Blind Literalism rule.
 
 ## 3. Orthography, Tanween & Paragraph Architecture
+
 - **Paragraph Grouping**: Structure spoken explanations into coherent, readable paragraphs (4–5 lines each for complete thoughts).
 - **Periods (.)**: Place periods at the end of complete semantic units and at paragraph ends.
 - **Mandatory Final Period**: The entire file must terminate with an Arabic period (`.`) after the council expiation du'a.
-- **Tanween Placement**: Tanween must always be placed on the consonant preceding the alif: `شيئًا`، `قضاءً`، `شابًّا`.
+- **Tanween Placement**: Tanween must always be placed on the consonant preceding the alif: `شيئًا`، `قضاءً`، `شابًّا`، `خطًا`.
 - **Spelling Nuances**:
   - Write `إذًا` strictly with tanween (never with nun `إذن`).
   - Write `إذا` with an explicit kasrah on the hamza.
@@ -25,11 +28,13 @@
   - Strictly distinguish Ya (`ي`) from Alif Maqsura (`ى`).
 
 ## 4. Quranic Text and Prophetic Hadiths
+
 - **The Holy Quran**: Enclose Quranic citations within single parentheses `( )`, fully vowelized (tashkeel) according to the authentic Uthmani script, **even if the Sheikh quotes a partial fragment or single word**.
 - **Prophetic Hadiths**: Enclose statements of the Prophet صلى الله عليه وسلم within quotation marks `" "`.
 - **Salawat**: Always write out in full: `صلى الله عليه وسلم`.
 
 ## 5. Header Architecture & Automated Metadata Extraction
+
 - **Input Pattern Detection**: When the raw transcript begins with a filename or timestamp token (e.g., `YYYY-MM-DD [keyword].mp3`, such as `2026-09-10 سيرة.mp3`) accompanied by metadata tags (e.g., `دليل المصدر`):
   - **Date Extraction**: Extract `YYYY-MM-DD`.
   - **Keyword Mapping**: Map the subject keyword to the canonical book using the Routing Table in `CONTEXT.md`:
@@ -55,6 +60,7 @@
     - **Project Internal File**: `03_مخرجات_الوورد\[YYYY-MM-DD]_[subject].docx` (descriptively named for repo archive and continuous diff loop).
 
 ## 6. Dialogue & Speaker Attribution (Learned from Approved Lessons)
+
 - **Active Dialogue Attribution**: Every intervention, student question, or listener interjection must be placed on its own line prefixed with `طالب: `. Never merge active audience participation into the Sheikh's speech as a rhetorical monologue.
 - **Prohibition of Student Bold**: The label `طالب: ` and student speech are in regular font (never bold). Bold is strictly reserved for Matn `**(نص المتن المشكول)**`.
 - **Inaudible Audio Formatting**:
