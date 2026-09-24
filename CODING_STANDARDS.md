@@ -2,7 +2,7 @@
 
 ## 1. Scope & Blast Radius
 
-- **Strict Scope Boundary**: Edits must modify exclusively the files declared in the task prompt. Limit modifications strictly to files declared in the task scope.
+- **Strict Scope Boundary**: Edits must modify exclusively the files declared in the task prompt.
 
 ## 2. Verifiable Completion Criteria
 
@@ -10,7 +10,7 @@
 
 ## 3. Single Source of Truth
 
-- **Domain vs. Mechanics**: `CONTEXT.md` maintains high-level domain terminology, routing tables, and lean pointers. Operational mechanics belong strictly in designated skill files (e.g. `tafreegh/SKILL.md`).
+- **Domain vs. Mechanics**: `CONTEXT.md` maintains high-level domain terminology, routing tables, and lean pointers. Operational mechanics belong strictly in designated skill files (e.g. `tafreegh-skill/SKILL.md`).
 - **Single Definition**: State flags, options, and heuristics in their authoritative file. Ancillary documents point to that single definition.
 
 ## 4. Scratch & Tool Economy
