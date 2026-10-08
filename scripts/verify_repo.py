@@ -30,6 +30,36 @@ FORBIDDEN_ROOT_PATTERNS = [
     re.compile(r"^context_log\.txt$", re.IGNORECASE),
 ]
 
+ALLOWED_ROOT_FILES = {
+    # Steering & Documentation
+    "README.md",
+    "CODING_STANDARDS.md",
+    "CONTEXT.md",
+    "GLOSSARY.md",
+    "handoff.md",
+    # Assets & Templates
+    "Word base.docx",
+    # Tooling & Config
+    ".gitignore",
+    ".lintstagedrc",
+    ".prettierignore",
+    ".prettierrc",
+    "package.json",
+    "package-lock.json",
+    # Legacy tracked root artifacts
+    "cues_report.txt",
+    "dir_test.txt",
+    "fetch_out.txt",
+    "scratch1.txt",
+    "scratch2.txt",
+    "scratch3.txt",
+    "search_results.txt",
+    "test.py",
+    "test_out.txt",
+    "wayfinder_map.md",
+}
+
+
 STEERING_DOCS = [
     "CONTEXT.md",
     "CODING_STANDARDS.md",
@@ -72,22 +102,43 @@ class Finding:
             location = ""
         return f"[{category_name}] {location}{self.message}"
 
+VALID_SUBDIRECTORIES = {
+    "01_Matn_Sources": {"processed"},
+    "02_Raw_Inputs": {"processed"},
+    "03_AI_Outputs": set(),
+    "04_Training_Data": set(),
+}
+
 def check_directories(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     for dir_name in STANDARD_DIRS:
         target_path = base_dir / dir_name
         if not target_path.is_dir():
             findings.append(Finding(category=FindingCategory.DIR, message=f"Missing standard directory: {dir_name}"))
+        else:
+            allowed = VALID_SUBDIRECTORIES.get(dir_name, set())
+            for child in target_path.iterdir():
+                if child.is_dir():
+                    if child.name in allowed or "_مقاطع" in child.name:
+                        continue
+                    findings.append(Finding(
+                        category=FindingCategory.DIR,
+                        message=f"Unauthorized subdirectory '{child.name}' in {dir_name}. Allowed: {sorted(allowed)}",
+                        file_path=str(child.relative_to(base_dir))
+                    ))
 
-def check_scratch_cleanliness(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
+def check_no_root_scratch(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     for candidate_file in base_dir.iterdir():
         if candidate_file.is_file():
-            for pattern in FORBIDDEN_ROOT_PATTERNS:
-                if pattern.match(candidate_file.name):
-                    findings.append(Finding(
-                        category=FindingCategory.SCRATCH,
-                        message=f"Root-level scratch file found: {candidate_file.name}. Move to .scratch/ or $env:TEMP",
-                        file_path=candidate_file.name
-                    ))
+            if candidate_file.name not in ALLOWED_ROOT_FILES:
+                findings.append(Finding(
+                    category=FindingCategory.SCRATCH,
+                    message=f"Root-level scratch file found: {candidate_file.name}. Move to .scratch/ or $env:TEMP",
+                    file_path=candidate_file.name
+                ))
+
+def check_scratch_cleanliness(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
+    check_no_root_scratch(findings, base_dir=base_dir)
+
 
 def check_steering_docs_phrasing(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     for doc_name in STEERING_DOCS:
@@ -164,7 +215,7 @@ def check_coding_standards(findings: list[Finding], base_dir: Path = REPO_ROOT) 
 def run_all_checks(base_dir: Path = REPO_ROOT) -> list[Finding]:
     findings: list[Finding] = []
     check_directories(findings, base_dir=base_dir)
-    check_scratch_cleanliness(findings, base_dir=base_dir)
+    check_no_root_scratch(findings, base_dir=base_dir)
     check_steering_docs_phrasing(findings, base_dir=base_dir)
     check_context_integrity(findings, base_dir=base_dir)
     check_coding_standards(findings, base_dir=base_dir)

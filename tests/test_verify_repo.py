@@ -53,3 +53,50 @@ def test_negative_phrasing_detection(tmp_path):
     phrasing_findings = [item for item in findings if item.category == verify_repo.FindingCategory.PHRASING]
     assert len(phrasing_findings) == 1
     assert "لا تفعل" in phrasing_findings[0].message
+
+def test_check_directories_allows_processed_subdirectories(tmp_path):
+    for d in verify_repo.STANDARD_DIRS:
+        (tmp_path / d).mkdir()
+    (tmp_path / "01_Matn_Sources" / "processed").mkdir()
+    (tmp_path / "02_Raw_Inputs" / "processed").mkdir()
+    (tmp_path / "02_Raw_Inputs" / "2026-09-19 منطق.md_مقاطع").mkdir()
+
+    findings = []
+    verify_repo.check_directories(findings, base_dir=tmp_path)
+    assert len(findings) == 0, f"Expected 0 findings, got: {findings}"
+
+def test_check_directories_flags_unauthorized_subdirectory(tmp_path):
+    for d in verify_repo.STANDARD_DIRS:
+        (tmp_path / d).mkdir()
+    (tmp_path / "01_Matn_Sources" / "random_folder").mkdir()
+
+    findings = []
+    verify_repo.check_directories(findings, base_dir=tmp_path)
+    dir_findings = [f for f in findings if f.category == verify_repo.FindingCategory.DIR]
+    assert len(dir_findings) == 1
+    assert "Unauthorized subdirectory" in dir_findings[0].message
+
+def test_check_no_root_scratch_allows_standard_files(tmp_path):
+    (tmp_path / "README.md").write_text("Test", encoding="utf-8")
+    (tmp_path / "CODING_STANDARDS.md").write_text("Test", encoding="utf-8")
+    (tmp_path / "CONTEXT.md").write_text("Test", encoding="utf-8")
+    (tmp_path / "Word base.docx").write_text("Test", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("Test", encoding="utf-8")
+    (tmp_path / "GLOSSARY.md").write_text("Test", encoding="utf-8")
+
+    findings = []
+    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
+    assert len(findings) == 0, f"Expected 0 findings, got: {findings}"
+
+def test_check_no_root_scratch_flags_unauthorized_scratch(tmp_path):
+    (tmp_path / "README.md").write_text("Test", encoding="utf-8")
+    (tmp_path / "detailed_diff.py").write_text("Test", encoding="utf-8")
+    (tmp_path / "temp.md").write_text("Test", encoding="utf-8")
+
+    findings = []
+    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
+    scratch_findings = [f for f in findings if f.category == verify_repo.FindingCategory.SCRATCH]
+    assert len(scratch_findings) == 2
+    flagged_files = {f.file_path for f in scratch_findings}
+    assert flagged_files == {"detailed_diff.py", "temp.md"}
+
