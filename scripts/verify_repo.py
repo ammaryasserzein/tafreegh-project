@@ -46,17 +46,6 @@ ALLOWED_ROOT_FILES = {
     ".prettierrc",
     "package.json",
     "package-lock.json",
-    # Legacy tracked root artifacts
-    "cues_report.txt",
-    "dir_test.txt",
-    "fetch_out.txt",
-    "scratch1.txt",
-    "scratch2.txt",
-    "scratch3.txt",
-    "search_results.txt",
-    "test.py",
-    "test_out.txt",
-    "wayfinder_map.md",
 }
 
 
