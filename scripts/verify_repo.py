@@ -46,6 +46,7 @@ ALLOWED_ROOT_FILES = {
     ".prettierrc",
     "package.json",
     "package-lock.json",
+    "pytest.ini",
 }
 
 

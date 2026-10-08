@@ -1,5 +1,11 @@
 """Tests for diff_cues module — detecting new student cue candidates from Diff Loop."""
 
+import sys
+from pathlib import Path
+
+scripts_dir = Path(__file__).parent.parent / "scripts"
+sys.path.insert(0, str(scripts_dir))
+
 from diff_cues import detect_new_student_cues
 
 

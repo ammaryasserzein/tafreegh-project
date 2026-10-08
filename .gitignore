@@ -16,3 +16,7 @@ scratch*.txt
 context_log.txt
 new_context.md
 old_context.md
+
+# Skill junctions & aliases
+.agents/skills/تفريغ/
+tafreegh-skill/

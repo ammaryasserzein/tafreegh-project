@@ -24,10 +24,11 @@ The pipeline relies on 4 standard English directories:
 
 ## Input Modes & Requirements
 
-The skill operates under two input configurations:
+The skill operates under three input configurations:
 
-1. **Standard Mode (Dual Input)**: Receives both `<draft_transcript>` (raw unedited transcript) and `<matn_source>` (vowelized canonical book text).
-2. **Fallback Mode (Single Input)**: Receives only `<draft_transcript>` when no canonical `<matn_source>` is available.
+1. **Primary Mode (Dual Input)**: Receives both `<draft_transcript>` (raw unedited transcript) and `<matn_source>` (vowelized canonical book text) under absolute Blind Literalism.
+2. **Dynamic Fallback Interleaving (Hybrid Dual Input)**: Receives both inputs when `<matn_source>` is incomplete. The system tracks matching via a Sequential Cursor and automatically falls back on missing segments.
+3. **Fallback Mode (Single Input)**: Receives only `<draft_transcript>` when no canonical `<matn_source>` is available.
 
 ---
 
@@ -49,54 +50,57 @@ The skill operates under two input configurations:
 
 ---
 
-## Section 2: Matn Processing Protocols (Dual-Mode)
+## Section 2: Matn Processing Protocols
 
-### Branch A: Standard Mode (Canonical Alignment with `<matn_source>`)
+### Branch A: Primary Mode (Canonical Alignment via Sequential Cursor)
 
 Execute when `<matn_source>` is provided:
 
-1. **Absolute Matn Authority**:
-   - The moment you encounter a phrase in `<draft_transcript>` corresponding to the Matn, pause standard transcription.
-   - Retrieve the exact matching text from `<matn_source>` and paste it verbatim with its exact diacritics (tashkeel), orthography (rasm), and any internal footnote markers without altering a single letter or vowel, even if the Sheikh mispronounced a vowel.
-2. **Phonetic & Fuzzy Matching**:
-   - Raw transcripts often contain phonetic misspellings of Matn phrases. Detect the intended Matn words and replace them with the correct vowelized text from `<matn_source>` without dropping adjacent text.
+1. **Sequential Cursor Tracking**:
+   - Maintain a sequential cursor tracking position in `<matn_source>`.
+   - **Forward Search Window**: Search `cursor -> cursor + 2000 chars` to match advancing passages and skips.
+   - **Full-Range Look-Behind**: On a forward miss, search the entire previously read range (`0 -> cursor`). This directly captures the Sheikh's common pattern of reading a full paragraph block first, then backing up to re-read it sentence-by-sentence with interleaved explanations. Look-behind matches preserve forward cursor advancement.
+2. **Absolute Matn Authority**:
+   - Retrieve matching text from `<matn_source>` verbatim with exact diacritics (tashkeel), orthography (rasm), and footnote markers without altering a single letter or vowel.
 3. **Strict Clamping (Zero Completion)**:
-   - **Never infer or complete unpronounced Matn phrases from the book.**
-   - If the Sheikh pronounces only one word or half a sentence from the Matn and stops to explain, extract **only** that exact fragment from `<matn_source>`, enclose it in brackets `**(الكلمة)**`, and drop to a new line for the explanation. We document what was spoken, not the entire book.
+   - Never infer or complete unpronounced Matn phrases from the book. Extract exclusively what was pronounced.
 4. **Interleaving Structure**:
-   - When a Matn segment is read, format it on its own isolated line enclosed in bold parentheses: `**(نص المتن المشكول)**`.
-   - Insert an empty line (paragraph break) before the Matn and immediately after the closing parenthesis.
-   - Pattern:
-     `**(نص المتن المقروء مشكولاً)**`
+   - Standalone Matn line: `**(نص المتن المشكول)**` separated by empty lines before and after.
+   - Inline citation inside Sheikh's explanation: `**(اللفظة)**` without breaking into new lines.
 
-     [Sheikh's explanation in normalized colloquial Egyptian...]
+### Branch B: Dynamic Fallback Interleaving (Hybrid Mode for Incomplete Matn Sources)
 
-     `**(تكملة المتن المقروء مشكولاً)**`
-5. **Inline Re-reading (Citation in Explanation)**:
-   - If the Sheikh repeats a previously read Matn word or phrase within his spoken explanation to elaborate on it, embed it inline within the paragraph in plain parentheses: `(اللفظة)` without bold asterisks, keeping bold strictly for standalone Matn lines.
+Execute dynamically when `<matn_source>` is provided but a read segment misses both forward and look-behind searches:
 
-### Branch B: Fallback Mode (Heuristic Linguistic Detection without `<matn_source>`)
+1. **Automatic Detection**:
+   - Switch seamlessly between Primary Mode (Blind Literalism with full tashkeel) and Fallback Mode on a per-segment basis without requiring upfront declaration.
+2. **Context-Dependent Conservative Doubt Rule**:
+   - **Sandwiched Segments (Relaxed Doubt)**: If an unmatched segment is bounded before and after by verified Primary matches from the same source, treat it as a source-omission from the book, formatting it as Matn without requiring extreme cue certainty.
+   - **Isolated Segments (Strict Doubt)**: If unmatched and not sandwiched, enforce strict verification (could be oral hadith or spontaneous quotation).
+3. **Visual Distinction (`<!-- fallback -->`)**:
+   - In intermediate `.md`, prepend `<!-- fallback -->` directly above the segment:
+     ```markdown
+     <!-- fallback -->
 
-Execute exclusively when `<matn_source>` is absent:
+     **(نص المتن المستكشف بدون تشكيل)**
+     ```
+   - In Word (`.docx`), rendered identically in bold without exposing HTML comments.
+4. **Summary Report Generation**:
+   - Emit a summary block `تقرير المتن الهجين` at the end of processing listing total segments, primary matches, re-reads, and fallback counts.
+
+### Branch C: Fallback Mode (Heuristic Detection without `<matn_source>`)
+
+Execute exclusively when `<matn_source>` is completely absent:
 
 1. **Transition Cues (Triggers)**:
-   - Monitor verbal cues signaling reading from the book: `قال`, `يقول`, `بيقول`, `روى`, `جاء في الكتاب`, `قال المصنف`.
-2. **Linguistic Fingerprint (Classical vs. Colloquial Boundary)**:
-   - **Matn**: 100% pure Classical Arabic (فصحى سليمة) without dialectal intrusion.
-   - **Explanation**: Blends classical terminology with Egyptian colloquial phrasing.
-   - **Boundary Trigger**: The moment an Egyptian colloquial word or syntax occurs, the Matn segment ends and explanation begins.
-3. **Zero-Tolerance Merging (Structural Separation)**:
-   - Treat every detected Matn segment as an isolated heading. Never merge Sheikh's explanation and Matn text on the same line.
-   - Separate with blank lines before and after:
-     `**(نص المتن المستكشف)**`
-
-     [Sheikh's explanation in normalized colloquial Egyptian...]
-4. **Orthography, Tashkeel & Punctuation**:
-   - Transcribe detected Matn **without tashkeel** (preserve spoken words verbatim without synthesizing grammatical vowels).
-   - Enclose in bold parentheses: `**(نص المتن)**`.
-   - If a Matn segment concludes before returning to explanation, place terminal punctuation outside the bracket: `( ... آخره).`
-5. **Conservative Doubt Rule (When in Doubt)**:
-   - If a classical Arabic phrase could plausibly be a Hadith citation, Quranic verse, or the Sheikh's own eloquent explanation rather than a book Matn, do NOT format it as Matn. Keep it within standard explanation flow or apply Quran `( )` / Hadith `" "` formatting. Enclose in Matn brackets only when book-reading context is unambiguous.
+   - Monitor verbal cues: `قال`, `يقول`, `بيقول`, `روى`, `جاء في الكتاب`, `قال المصنف`.
+2. **Linguistic Fingerprint**:
+   - Matn is 100% Classical Arabic (فصحى).
+   - Explanation contains Egyptian colloquial terms. The moment dialect appears, Matn ends.
+3. **Orthography & Tashkeel**:
+   - Transcribe detected Matn **without tashkeel**. Format as isolated heading: `**(نص المتن)**`.
+4. **Conservative Doubt Rule**:
+   - Keep ambiguous classical phrases within standard explanation or Quran/Hadith formatting unless book-reading is unambiguous.
 
 ---
 
@@ -130,6 +134,10 @@ Execute exclusively when `<matn_source>` is absent:
        4. `ها؟` (prompting for an answer or confirmation)
        5. `أنا قلت إيه؟` (quizzing the students on what was just said)
        6. `صعب ولا سهل؟` (asking for student feedback)
+       7. `بتقول حاجة؟` (asking if a student said something)
+       8. `إيه رأيك؟` (asking for a student's opinion)
+       9. `أنت بتجيب دليل آخر؟` (responding to a student providing evidence)
+       10. `الحكاية؟` (prompting for an answer or confirmation)
      - **Disambiguation (Rhetorical vs. Genuine)**: If a cue word (especially `نعم؟`) appears **mid-paragraph** and the Sheikh continues speaking immediately without any topic shift, it is **rhetorical** — do NOT insert a student line. Only treat it as a genuine student prompt when it appears at a natural break point.
      - **Placement**: Sheikh's sentence with cue → new line → `طالب: صوت غير مسموع.` → new line → Sheikh continues.
    - **Zero Hallucination (Unknown Situations)**:
@@ -251,15 +259,21 @@ Consult the official [Egyptian Dialect Dictionary](references/dialect-rules.md).
    - Run `fetch_training_data.py` to automatically fetch completed files from OneDrive, extract them via `read_docx.py`, and save them as plain-text into `04_Training_Data/`. The original `.docx` will be kept safely in the `(تم التسليم)` folder, and the script will automatically skip it in future runs if the `.md` already exists.
 2. **Document Extraction**:
    - The extraction step is handled by `fetch_training_data.py` generating markdown in `04_Training_Data/`. If manual extraction is needed, use `read_docx.py`.
-3. **Dual-Mode Diff Analysis**:
-   - **Global Diff (Applies to Both Modes)**:
+3. **Diff Analysis & Classification**:
+   - **Matn Classification (`diff_inline_matn.py`)**:
+     - `fallback_correction`: User revisions to segments processed in Fallback Mode (`<!-- fallback -->`) are isolated from copy errors, preserving training signal fidelity.
+     - `oral_citation` (متن شفهي عارض / نقل مستقل): User-applied Matn brackets `**( ... )**` around oral citations or Hadiths not found in `<matn_source>` are captured as independent oral quotes.
+     - `matn_copy_error`: Transcription or alignment discrepancies against the canonical `<matn_source>`.
+   - **Student Cues Detection (`diff_cues.py`)**:
+     - Detects user-inserted `طالب: صوت غير مسموع.` and extracts preceding Sheikh statements as cue candidates.
+   - **Global Diff (Dialect & Dialogue)**:
      - Detect corrections in Egyptian colloquial terms and update `references/dialect-rules.md`.
-     - Detect dialogue formatting nuances (e.g., student turns `طالب: ` or `طالب: صوت غير مسموع.`) and update `references/formatting-rules.md`.
-   - **Branch A Learning (Standard Mode with `<matn_source>`)**:
+     - Detect dialogue formatting nuances and update `references/formatting-rules.md`.
+   - **Branch A Learning (Primary Mode with `<matn_source>`)**:
      - Save the verified triple (`<matn_source>`, `<draft_transcript>`, `<final_result>`) as a canonical golden benchmark in `examples/example-0X.md`.
-   - **Branch B Learning (Fallback Mode without `<matn_source>`)**:
-     - **Boundary & Trigger Discovery**: Analyze discrepancies in detected Matn boundaries against user's ground truth. If a Matn passage was preceded by an unlisted verbal cue, append the new reading cue to `Triggers` in Section 2 Branch B.
-     - **Isolated Benchmark Storage**: Save the verified pair (`<draft_transcript>`, `<final_result>`) into a dedicated fallback benchmark: `examples/example-fallback-0X.md`, keeping canonical benchmarks pristine.
+   - **Branch B Learning (Fallback Mode)**:
+     - **Boundary & Trigger Discovery**: Analyze discrepancies in detected Matn boundaries against user ground truth. Append new reading cues to `Triggers`.
+     - **Isolated Benchmark Storage**: Save into `examples/example-fallback-0X.md`.
      - **Tashkeel Protection**: User-added diacritics in Word remain strictly archived for that specific document; never extrapolate or hallucinate tashkeel in subsequent Fallback Mode runs.
 4. **Report Learned Rules**:
    Report an itemized summary of newly learned dialect words, discovered triggers, and saved benchmarks back to the user.
