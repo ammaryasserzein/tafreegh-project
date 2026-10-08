@@ -16,20 +16,15 @@ try:
         SequentialMatnMatcher,
         MatchMode,
         MatnMatchResult,
-        format_matn_segment,
         generate_fallback_summary,
     )
 except ImportError:
-    try:
-        from .matn_matcher import (
-            SequentialMatnMatcher,
-            MatchMode,
-            MatnMatchResult,
-            format_matn_segment,
-            generate_fallback_summary,
-        )
-    except ImportError:
-        pass
+    from .matn_matcher import (
+        SequentialMatnMatcher,
+        MatchMode,
+        MatnMatchResult,
+        generate_fallback_summary,
+    )
 
 # Ensure UTF-8 output
 if hasattr(sys.stdout, 'reconfigure'):

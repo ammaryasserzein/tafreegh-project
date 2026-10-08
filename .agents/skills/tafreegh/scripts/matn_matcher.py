@@ -174,7 +174,7 @@ class SequentialMatnMatcher:
         # 3. Double-miss: Fallback Mode
         return self._create_fallback_result(spoken_segment)
 
-    def resolve_sandwiched_fallbacks(self, window_size: int | None = None) -> None:
+    def resolve_sandwiched_fallbacks(self) -> None:
         """Identifies fallback segments bounded before and after by verified primary matches."""
         first_primary = next((i for i, h in enumerate(self.history) if h.mode == MatchMode.PRIMARY), None)
         last_primary = next((i for i in range(len(self.history) - 1, -1, -1) if self.history[i].mode == MatchMode.PRIMARY), None)
