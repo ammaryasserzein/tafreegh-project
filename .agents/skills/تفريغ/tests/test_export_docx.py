@@ -25,7 +25,10 @@ from export_docx import (
     archive_processed_inputs,
     is_matching_stem,
     normalize_stem,
+    _extract_candidate_query,
+    _format_segment_output,
 )
+from matn_matcher import MatnMatchResult, MatchMode
 
 class TestGetOneDriveFolder(unittest.TestCase):
     def setUp(self):
@@ -382,6 +385,62 @@ class TestIsMatchingStem(unittest.TestCase):
 
     def test_is_matching_stem_different_date_rejects(self):
         self.assertFalse(is_matching_stem("2026-09-20_سيرة.md", "2026-09-19", "سيرة"))
+
+
+class TestExportDocxHelpers(unittest.TestCase):
+    def test_extract_candidate_query_strips_outer_parentheses(self):
+        self.assertEqual(_extract_candidate_query("(مبادئ كل علم)"), "مبادئ كل علم")
+        self.assertEqual(_extract_candidate_query(" (مبادئ كل علم) "), "مبادئ كل علم")
+        self.assertEqual(_extract_candidate_query("مبادئ كل علم"), "مبادئ كل علم")
+        self.assertEqual(_extract_candidate_query("((متداخل))"), "(متداخل)")
+
+    def test_format_segment_output_primary(self):
+        res = MatnMatchResult(
+            mode=MatchMode.PRIMARY,
+            text="مَبَادِئُ كُلِّ عِلْمٍ",
+            start_pos=0,
+            end_pos=20,
+            is_fallback=False
+        )
+        self.assertEqual(_format_segment_output(res, is_standalone=True), ["**(مَبَادِئُ كُلِّ عِلْمٍ)**"])
+        self.assertEqual(_format_segment_output(res, is_standalone=False), "**(مَبَادِئُ كُلِّ عِلْمٍ)**")
+
+    def test_format_segment_output_sandwiched_fallback(self):
+        res = MatnMatchResult(
+            mode=MatchMode.FALLBACK,
+            text="سقط من المتن",
+            start_pos=-1,
+            end_pos=-1,
+            is_fallback=True,
+            is_sandwiched=True
+        )
+        self.assertEqual(
+            _format_segment_output(res, is_standalone=True),
+            ["<!-- fallback -->", "**(سقط من المتن)**"]
+        )
+        self.assertEqual(
+            _format_segment_output(res, is_standalone=False),
+            "<!-- fallback --> **(سقط من المتن)**"
+        )
+
+    def test_format_segment_output_isolated_dialect_fallback(self):
+        # Dialect segment without sandwiching fails verification -> unbolded
+        res = MatnMatchResult(
+            mode=MatchMode.FALLBACK,
+            text="ده كلام عامي خالص مش كدا؟",
+            start_pos=-1,
+            end_pos=-1,
+            is_fallback=True,
+            is_sandwiched=False
+        )
+        self.assertEqual(
+            _format_segment_output(res, is_standalone=True),
+            ["(ده كلام عامي خالص مش كدا؟)"]
+        )
+        self.assertEqual(
+            _format_segment_output(res, is_standalone=False),
+            "(ده كلام عامي خالص مش كدا؟)"
+        )
 
 
 if __name__ == "__main__":

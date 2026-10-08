@@ -153,7 +153,7 @@ class SequentialMatnMatcher:
 
         # 2. Look-behind search (0 -> cursor_norm)
         lookbehind_slice = self.norm_source[:self.cursor_norm]
-        idx_behind = lookbehind_slice.find(search_query)
+        idx_behind = lookbehind_slice.rfind(search_query)
         if idx_behind != -1:
             norm_start = idx_behind
             norm_end = norm_start + len(search_query)
@@ -174,20 +174,18 @@ class SequentialMatnMatcher:
         # 3. Double-miss: Fallback Mode
         return self._create_fallback_result(spoken_segment)
 
-    def resolve_sandwiched_fallbacks(self, window_size: int = 1) -> None:
-        """Identifies fallback segments immediately bounded by verified primary matches within a localized window."""
+    def resolve_sandwiched_fallbacks(self, window_size: int | None = None) -> None:
+        """Identifies fallback segments bounded before and after by verified primary matches."""
+        first_primary = next((i for i, h in enumerate(self.history) if h.mode == MatchMode.PRIMARY), None)
+        last_primary = next((i for i in range(len(self.history) - 1, -1, -1) if self.history[i].mode == MatchMode.PRIMARY), None)
+
         for i, item in enumerate(self.history):
             if item.mode == MatchMode.FALLBACK:
-                prev_dists = [i - j for j in range(i - 1, -1, -1) if self.history[j].mode == MatchMode.PRIMARY]
-                prev_dist = prev_dists[0] if prev_dists else None
-
-                next_dists = [j - i for j in range(i + 1, len(self.history)) if self.history[j].mode == MatchMode.PRIMARY]
-                next_dist = next_dists[0] if next_dists else None
-
-                if prev_dist is not None and next_dist is not None:
-                    item.is_sandwiched = (prev_dist <= window_size and next_dist <= window_size)
-                else:
-                    item.is_sandwiched = False
+                item.is_sandwiched = (
+                    first_primary is not None
+                    and last_primary is not None
+                    and first_primary < i < last_primary
+                )
 
 
 def format_matn_segment(result: MatnMatchResult) -> str:

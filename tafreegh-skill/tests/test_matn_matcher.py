@@ -138,9 +138,9 @@ class TestMatnMatcher(unittest.TestCase):
         self.assertEqual(res.text, "الحَدُّ وَالمَوْضُوعُ")
         self.assertEqual(source[res.start_pos:res.end_pos], res.text)
 
-    def test_sandwiched_fallback_requires_localized_window(self):
+    def test_sandwiched_fallback_supports_consecutive_fallbacks_gap(self):
         # Primary, Fallback, Fallback, Fallback, Primary
-        # Under localized window (default=1), consecutive fallbacks (>1 distance) are NOT sandwiched
+        # Consecutive fallbacks bounded before and after by verified primary matches are sandwiched
         self.matcher.match_segment("مبادئ كل علم عشره")
         self.matcher.match_segment("سقط أول")
         self.matcher.match_segment("سقط ثان")
@@ -148,21 +148,48 @@ class TestMatnMatcher(unittest.TestCase):
         self.matcher.match_segment("ونسبه وفضله والواضع")
 
         self.matcher.resolve_sandwiched_fallbacks()
-        self.assertFalse(self.matcher.history[1].is_sandwiched)
-        self.assertFalse(self.matcher.history[2].is_sandwiched)
-        self.assertFalse(self.matcher.history[3].is_sandwiched)
-
-    def test_sandwiched_fallback_configurable_window(self):
-        # Primary, Fallback, Fallback, Primary
-        # With window_size=2, fallbacks within distance 2 are sandwiched
-        self.matcher.match_segment("مبادئ كل علم عشره")
-        self.matcher.match_segment("سقط أول")
-        self.matcher.match_segment("سقط ثان")
-        self.matcher.match_segment("ونسبه وفضله والواضع")
-
-        self.matcher.resolve_sandwiched_fallbacks(window_size=2)
         self.assertTrue(self.matcher.history[1].is_sandwiched)
         self.assertTrue(self.matcher.history[2].is_sandwiched)
+        self.assertTrue(self.matcher.history[3].is_sandwiched)
+
+    def test_isolated_fallbacks_outside_primary_bounds(self):
+        # Fallback (start) -> Primary -> Fallback -> Primary -> Fallback (end)
+        self.matcher.match_segment("سقط قبل البداية")
+        self.matcher.match_segment("مبادئ كل علم عشره")
+        self.matcher.match_segment("سقط بينهما")
+        self.matcher.match_segment("ونسبه وفضله والواضع")
+        self.matcher.match_segment("سقط بعد النهاية")
+
+        self.matcher.resolve_sandwiched_fallbacks()
+        self.assertFalse(self.matcher.history[0].is_sandwiched)
+        self.assertTrue(self.matcher.history[2].is_sandwiched)
+        self.assertFalse(self.matcher.history[4].is_sandwiched)
+
+    def test_lookbehind_matches_most_recent_occurrence_with_rfind(self):
+        source = (
+            "قَالَ الْمُصَنِّفُ رَحِمَهُ اللَّهُ: "
+            "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ ... "
+            "ثُمَّ قَالَ الْمُصَنِّفُ رَحِمَهُ اللَّهُ: "
+            "الحَدُّ وَالمَوْضُوعُ ثُمَّ الثَّمَرَهْ"
+        )
+        matcher = SequentialMatnMatcher(source, forward_lookahead=1000)
+        # Advance through first quote
+        matcher.match_segment("قال المصنف رحمه الله")
+        # Advance through first verse
+        matcher.match_segment("ان مبادئ كل علم عشره")
+        # Advance through second quote
+        matcher.match_segment("ثم قال المصنف رحمه الله")
+        # Advance through second verse
+        matcher.match_segment("الحد والموضوع ثم الثمره")
+
+        # Now re-read: "قال المصنف رحمه الله"
+        res_reread = matcher.match_segment("قال المصنف رحمه الله")
+        self.assertEqual(res_reread.mode, MatchMode.PRIMARY)
+        self.assertTrue(res_reread.is_re_read)
+        first_idx = source.find("قَالَ الْمُصَنِّفُ")
+        second_idx = source.rfind("قَالَ الْمُصَنِّفُ")
+        self.assertNotEqual(first_idx, second_idx)
+        self.assertEqual(res_reread.start_pos, second_idx)
 
 
 if __name__ == "__main__":

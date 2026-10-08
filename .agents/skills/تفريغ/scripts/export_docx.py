@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 import re
 import shutil
@@ -13,6 +15,7 @@ try:
     from matn_matcher import (
         SequentialMatnMatcher,
         MatchMode,
+        MatnMatchResult,
         format_matn_segment,
         generate_fallback_summary,
     )
@@ -21,6 +24,7 @@ except ImportError:
         from .matn_matcher import (
             SequentialMatnMatcher,
             MatchMode,
+            MatnMatchResult,
             format_matn_segment,
             generate_fallback_summary,
         )
@@ -573,7 +577,32 @@ class _CandidateItem:
     has_preceding_fallback_line: bool
     inline_span: tuple[int, int] | None
     cand_query: str
-    result: object = None
+    result: MatnMatchResult | None = None
+
+
+def _extract_candidate_query(inner_text: str) -> str:
+    """Strips outer parentheses if present from inner matn text."""
+    inner = inner_text.strip()
+    if inner.startswith('(') and inner.endswith(')'):
+        return inner[1:-1].strip()
+    return inner
+
+
+def _format_segment_output(res: MatnMatchResult, is_standalone: bool = True) -> list[str] | str:
+    """Formats matched matn segment for markdown output based on match mode and context."""
+    clean_text = res.text.strip()
+    if res.mode == MatchMode.PRIMARY:
+        return [f"**({clean_text})**"] if is_standalone else f"**({clean_text})**"
+
+    is_valid = res.is_sandwiched or verify_isolated_segment(res.text)
+    if is_standalone:
+        if is_valid:
+            return ["<!-- fallback -->", f"**({clean_text})**"]
+        return [f"({clean_text})"]
+    else:
+        if is_valid:
+            return f"<!-- fallback --> **({clean_text})**"
+        return f"({clean_text})"
 
 
 def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher) -> str:
@@ -604,15 +633,13 @@ def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher)
                 next_stripped = lines[l_idx + 1].strip()
                 matn_m = re.match(r'^\*\*(.+)\*\*$', next_stripped)
                 if matn_m:
-                    inner = matn_m.group(1).strip()
-                    cand_query = inner[1:-1].strip() if inner.startswith('(') and inner.endswith(')') else inner
                     candidates.append(_CandidateItem(
                         para_idx=p_idx,
                         line_idx=l_idx + 1,
                         is_standalone=True,
                         has_preceding_fallback_line=True,
                         inline_span=None,
-                        cand_query=cand_query
+                        cand_query=_extract_candidate_query(matn_m.group(1))
                     ))
                     skip_next = True
                     continue
@@ -620,30 +647,26 @@ def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher)
             # Check if line itself is standalone matn: **(...)** or **...**
             matn_m = re.match(r'^\*\*(.+)\*\*$', stripped)
             if matn_m:
-                inner = matn_m.group(1).strip()
-                cand_query = inner[1:-1].strip() if inner.startswith('(') and inner.endswith(')') else inner
                 candidates.append(_CandidateItem(
                     para_idx=p_idx,
                     line_idx=l_idx,
                     is_standalone=True,
                     has_preceding_fallback_line=False,
                     inline_span=None,
-                    cand_query=cand_query
+                    cand_query=_extract_candidate_query(matn_m.group(1))
                 ))
                 continue
 
             # Line contains inline **...**
             inline_matches = list(re.finditer(r'\*\*(.+?)\*\*', line))
             for im in inline_matches:
-                inner = im.group(1).strip()
-                cand_query = inner[1:-1].strip() if inner.startswith('(') and inner.endswith(')') else inner
                 candidates.append(_CandidateItem(
                     para_idx=p_idx,
                     line_idx=l_idx,
                     is_standalone=False,
                     has_preceding_fallback_line=False,
                     inline_span=(im.start(), im.end()),
-                    cand_query=cand_query
+                    cand_query=_extract_candidate_query(im.group(1))
                 ))
 
     # Pass 1: Sequential matching through matcher
@@ -669,15 +692,8 @@ def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher)
                 None
             )
             if standalone_cand:
-                res = standalone_cand.result
-                if res.mode == MatchMode.PRIMARY:
-                    new_lines.append(f"**({res.text.strip()})**")
-                else:
-                    if res.is_sandwiched or verify_isolated_segment(res.text):
-                        new_lines.append("<!-- fallback -->")
-                        new_lines.append(f"**({res.text.strip()})**")
-                    else:
-                        new_lines.append(f"({res.text.strip()})")
+                if standalone_cand.result is not None:
+                    new_lines.extend(_format_segment_output(standalone_cand.result, is_standalone=True))
                 l_idx += 1
                 continue
 
@@ -688,15 +704,8 @@ def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher)
                     None
                 )
                 if next_cand:
-                    res = next_cand.result
-                    if res.mode == MatchMode.PRIMARY:
-                        new_lines.append(f"**({res.text.strip()})**")
-                    else:
-                        if res.is_sandwiched or verify_isolated_segment(res.text):
-                            new_lines.append("<!-- fallback -->")
-                            new_lines.append(f"**({res.text.strip()})**")
-                        else:
-                            new_lines.append(f"({res.text.strip()})")
+                    if next_cand.result is not None:
+                        new_lines.extend(_format_segment_output(next_cand.result, is_standalone=True))
                     l_idx += 2
                     continue
 
@@ -709,14 +718,10 @@ def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher)
                 cur_line = line
                 for c in line_cands_sorted:
                     start, end = c.inline_span
-                    res = c.result
-                    if res.mode == MatchMode.PRIMARY:
-                        rep = f"**({res.text.strip()})**"
+                    if c.result is not None:
+                        rep = _format_segment_output(c.result, is_standalone=False)
                     else:
-                        if res.is_sandwiched or verify_isolated_segment(res.text):
-                            rep = f"<!-- fallback --> **({res.text.strip()})**"
-                        else:
-                            rep = f"({res.text.strip()})"
+                        rep = cur_line[start:end]
                     cur_line = cur_line[:start] + rep + cur_line[end:]
                 new_lines.append(cur_line)
                 l_idx += 1
