@@ -71,7 +71,10 @@ def normalize_arabic(text: str) -> str:
     """Normalizes hamzas, wasl, and cleans leading/trailing whitespace."""
     if not text:
         return ""
-    return text.strip()
+    t = text.strip()
+    t = re.sub(r'[أإآٱ]', 'ا', t)
+    t = re.sub(r'\s+', ' ', t)
+    return t.strip()
 
 
 def parse_metadata(text: str) -> dict:
@@ -410,7 +413,7 @@ def is_matching_stem(candidate_name: str, date: str, keyword: str) -> bool:
     stem_rem = cleaned_stem.replace(date, " ").strip(" _-")
 
     def _normalize_token(t: str) -> str:
-        t = re.sub(r'[أإآٱ]', 'ا', t)
+        t = normalize_arabic(t)
         t = re.sub(r'ة', 'ه', t)
         t = re.sub(r'ى', 'ي', t)
         t = re.sub(r'[_\s]+', ' ', t)
@@ -421,9 +424,11 @@ def is_matching_stem(candidate_name: str, date: str, keyword: str) -> bool:
 
     kw_variants = {norm_kw}
     for k, v in CANONICAL_SUBJECT_NAMES.items():
-        if _normalize_token(k) == norm_kw or _normalize_token(v) == norm_kw:
-            kw_variants.add(_normalize_token(k))
-            kw_variants.add(_normalize_token(v))
+        k_norm = _normalize_token(k)
+        v_norm = _normalize_token(v)
+        if k_norm == norm_kw or v_norm == norm_kw:
+            kw_variants.add(k_norm)
+            kw_variants.add(v_norm)
 
     return any(v in norm_rem for v in kw_variants)
 

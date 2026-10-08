@@ -95,19 +95,25 @@ class SequentialMatnMatcher:
 
         self.norm_source = "".join(self.norm_chars)
 
-    def _extract_slice_coords(self, norm_start: int, norm_end: int) -> tuple[int, int]:
-        """Calculates exact start and end indices in raw source text coordinates."""
+    def _extract_original_slice(self, norm_start: int, norm_end: int) -> tuple[int, int, str]:
+        """Calculates exact coordinates and extracts original slice preserving tashkeel and punctuation."""
         orig_start = self.pos_map[norm_start]
         last_char_idx = self.pos_map[norm_end - 1]
         orig_end = last_char_idx + 1
         while orig_end < len(self.source) and TASHKEEL_REGEX.match(self.source[orig_end]):
             orig_end += 1
-        return orig_start, orig_end
+        return orig_start, orig_end, self.source[orig_start:orig_end]
 
-    def _extract_original_slice(self, norm_start: int, norm_end: int) -> str:
-        """Extracts original slice from source preserving exact tashkeel and punctuation."""
-        orig_start, orig_end = self._extract_slice_coords(norm_start, norm_end)
-        return self.source[orig_start:orig_end]
+    def _create_fallback_result(self, spoken_segment: str) -> MatnMatchResult:
+        res = MatnMatchResult(
+            mode=MatchMode.FALLBACK,
+            text=strip_tashkeel(spoken_segment).strip(),
+            start_pos=-1,
+            end_pos=-1,
+            is_fallback=True
+        )
+        self.history.append(res)
+        return res
 
     def match_segment(self, spoken_segment: str) -> MatnMatchResult:
         """
@@ -118,15 +124,7 @@ class SequentialMatnMatcher:
         """
         search_query = normalize_arabic_search(spoken_segment)
         if not search_query or len(search_query) < 3:
-            res = MatnMatchResult(
-                mode=MatchMode.FALLBACK,
-                text=strip_tashkeel(spoken_segment).strip(),
-                start_pos=-1,
-                end_pos=-1,
-                is_fallback=True
-            )
-            self.history.append(res)
-            return res
+            return self._create_fallback_result(spoken_segment)
 
         # 1. Forward search
         window_end = min(len(self.norm_source), self.cursor_norm + self.forward_lookahead)
@@ -136,8 +134,7 @@ class SequentialMatnMatcher:
         if idx_forward != -1:
             norm_start = self.cursor_norm + idx_forward
             norm_end = norm_start + len(search_query)
-            orig_start, orig_end = self._extract_slice_coords(norm_start, norm_end)
-            canon_text = self.source[orig_start:orig_end]
+            orig_start, orig_end, canon_text = self._extract_original_slice(norm_start, norm_end)
             
             # Advance cursor
             self.cursor_norm = norm_end
@@ -160,8 +157,7 @@ class SequentialMatnMatcher:
         if idx_behind != -1:
             norm_start = idx_behind
             norm_end = norm_start + len(search_query)
-            orig_start, orig_end = self._extract_slice_coords(norm_start, norm_end)
-            canon_text = self.source[orig_start:orig_end]
+            orig_start, orig_end, canon_text = self._extract_original_slice(norm_start, norm_end)
 
             # Preserve forward cursor (do not rewind)
             res = MatnMatchResult(
@@ -176,15 +172,7 @@ class SequentialMatnMatcher:
             return res
 
         # 3. Double-miss: Fallback Mode
-        res = MatnMatchResult(
-            mode=MatchMode.FALLBACK,
-            text=strip_tashkeel(spoken_segment).strip(),
-            start_pos=-1,
-            end_pos=-1,
-            is_fallback=True
-        )
-        self.history.append(res)
-        return res
+        return self._create_fallback_result(spoken_segment)
 
     def resolve_sandwiched_fallbacks(self, window_size: int = 1) -> None:
         """Identifies fallback segments immediately bounded by verified primary matches within a localized window."""
