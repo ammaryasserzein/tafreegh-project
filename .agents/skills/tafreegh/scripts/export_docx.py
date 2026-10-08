@@ -372,17 +372,20 @@ def create_docx(markdown_text: str, output_path: Path, template_path: Path = WOR
             if not line:
                 continue
 
-            p = doc.add_paragraph()
-            set_p_rtl(p, align=None)
-
-            # Full line matn: **(...)** or **...**
             matn_full_match = re.match(r'^\*\*(.+)\*\*$', line)
             if matn_full_match:
+                doc.add_paragraph()
+                p = doc.add_paragraph()
+                set_p_rtl(p, align=None)
                 matn_content = matn_full_match.group(1)
                 run = p.add_run(matn_content)
                 set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=True)
+                doc.add_paragraph()
                 continue
-                
+
+            p = doc.add_paragraph()
+            set_p_rtl(p, align=None)
+
             # Mixed line with inline **(...)**
             parts = re.split(r'(\*\*[^*]+\*\*)', line)
             for part in parts:
@@ -391,7 +394,7 @@ def create_docx(markdown_text: str, output_path: Path, template_path: Path = WOR
                 if part.startswith('**') and part.endswith('**'):
                     inner_text = part[2:-2]
                     run = p.add_run(inner_text)
-                    set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=True)
+                    set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
                 elif part.startswith('طالب:'):
                     run_label = p.add_run('طالب: ')
                     set_run_font(run_label, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
@@ -407,6 +410,21 @@ def create_docx(markdown_text: str, output_path: Path, template_path: Path = WOR
     output_path.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(output_path))
     return output_path
+
+
+def format_thousands(text: str) -> str:
+    """Formats numbers like 30000 to 30 ألف and 5000 to 5 آلاف"""
+    def replacer(match):
+        num = int(match.group(1))
+        if 3 <= num <= 10:
+            return f"{num} آلاف"
+        elif num == 1:
+            return "ألف"
+        elif num == 2:
+            return "ألفين"
+        else:
+            return f"{num} ألف"
+    return re.sub(r'\b(\d+)000\b', replacer, text)
 
 
 def normalize_stem(candidate_name: str) -> str:
@@ -747,6 +765,7 @@ def export_documents(
     """
     project_root = Path(project_root)
     clean_md = standardize_transcript_header(markdown_text)
+    clean_md = format_thousands(clean_md)
     meta = parse_metadata(markdown_text)
     used_date = date or meta.get("date") or "تاريخ_غير_محدد"
     used_keyword = keyword or meta.get("keyword") or "عام"

@@ -65,8 +65,8 @@ Execute when `<matn_source>` is provided:
 3. **Strict Clamping (Zero Completion)**:
    - Never infer or complete unpronounced Matn phrases from the book. Extract exclusively what was pronounced.
 4. **Interleaving Structure**:
-   - Standalone Matn line: `**(نص المتن المشكول)**` separated by empty lines before and after.
-   - Inline citation inside Sheikh's explanation: `**(اللفظة)**` without breaking into new lines.
+   - Standalone Matn line: `**(نص المتن المشكول)**` separated by empty lines before and after. MUST NOT be on the same line as explanation.
+   - Inline citation inside Sheikh's explanation: `(اللفظة)` without breaking into new lines and WITHOUT bold `**`.
 
 ### Branch B: Dynamic Fallback Interleaving (Hybrid Mode for Incomplete Matn Sources)
 
@@ -210,6 +210,8 @@ Execute exclusively when `<matn_source>` is completely absent:
    - Both halves spoken: Separate line, spaced `...` between them.
    - Interrupted: First half starts on a new line, but text continues inline normally.
    - If Matn: Formatted as `**(الشطر الأول ... الشطر الثاني)**`.
+9. **Number Formatting**:
+   - For large round numbers in thousands, write them out textually instead of using trailing zeros: `30 ألف` (instead of 30000), `5 آلاف` (instead of 5000), `ألفين` (instead of 2000), `ألف` (instead of 1000).
 
 ---
 

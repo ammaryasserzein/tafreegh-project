@@ -9,7 +9,7 @@
 
 ## 2. Microsoft Word Compatibility
 
-- **Bold Tagging (Standalone vs Inline)**: Standalone Matn occurrences read from the book are placed on their own isolated lines enclosed in double asterisks and parentheses: `**(نص المتن)**`. Microsoft Word automatically parses markdown bold when pasted from modern clipboards. Conversely, when the Sheikh cites or repeats a Matn phrase inline within his ongoing explanation, enclose it in plain parentheses `(نص المتن)` without bold asterisks.
+- **Bold Tagging**: Enclose Matn occurrences in double asterisks and parentheses: `**(نص المتن)**`. Microsoft Word automatically parses markdown bold when pasted from modern clipboards, rendering it as native bold.
 - **Paragraph Spacing**: Separate distinct paragraphs with an empty line (double newline). This ensures Word lays out paragraphs with clean, balanced spacing without overlapping.
 - **Arabic Punctuation Only**: Exclusively use Arabic marks `(، . : ؟ !)`. Never output English punctuation or brackets `{}` / `[]`.
 - **Absolute Ban on Ellipsis (`...`)**: Never insert consecutive dots or ellipsis (`...`, `..`) to denote vocal pauses, trailing phrases, or spoken hesitations. Translate all hesitations and pause intervals into natural Arabic commas `،` or appropriate terminal punctuation (`.`, `؟`), ensuring clean, professional typography for Microsoft Word.
@@ -20,7 +20,7 @@
 - **Paragraph Grouping**: Structure spoken explanations into coherent, readable paragraphs (4–5 lines each for complete thoughts).
 - **Periods (.)**: Place periods at the end of complete semantic units and at paragraph ends.
 - **Mandatory Final Period**: The entire file must terminate with an Arabic period (`.`) after the council expiation du'a.
-- **Tanween Placement**: Tanween must always be placed on the consonant preceding the alif: `شيئًا`، `قضاءً`، `شابًّا`، `خطًا`.
+- **Tanween Placement**: Tanween must always be placed on the consonant preceding the alif: `شيئًا`، `قضاءً`، `شابًّا`.
 - **Spelling Nuances**:
   - Write `إذًا` strictly with tanween (never with nun `إذن`).
   - Write `إذا` with an explicit kasrah on the hamza.
