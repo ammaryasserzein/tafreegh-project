@@ -44,7 +44,9 @@ def main():
         print("No files found to process.")
         return
 
-    all_candidates = []
+    from diff_cues import detect_new_student_cues, format_cue_report, CueResult
+    
+    overall_result = CueResult(inserted=[], removed=[])
 
     for docx_path in docx_files:
         print(f"Processing {docx_path}...")
@@ -90,16 +92,19 @@ def main():
         ai_baseline = _find_ai_baseline(date_str, subject)
         if ai_baseline:
             ai_text = ai_baseline.read_text(encoding='utf-8')
-            candidates = detect_new_student_cues(ai_text, text)
-            if candidates:
-                all_candidates.extend(candidates)
-                print(f"  ↳ Found {len(candidates)} candidate cue(s) from diff with {ai_baseline.name}")
+            result = detect_new_student_cues(ai_text, text)
+            if result.inserted:
+                overall_result.inserted.extend(result.inserted)
+                print(f"  ↳ Found {len(result.inserted)} candidate cue(s) from diff with {ai_baseline.name}")
+            if result.removed:
+                overall_result.removed.extend(result.removed)
+                print(f"  ↳ Found {len(result.removed)} removed cue(s) from diff with {ai_baseline.name}")
         else:
             print(f"  ↳ No AI baseline (_AI.md) found for {md_filename} — skipping diff analysis")
 
     # Print consolidated cue report
-    if all_candidates:
-        print("\n" + format_cue_report(all_candidates))
+    if overall_result.inserted or overall_result.removed:
+        print("\n" + format_cue_report(overall_result))
 
 
 if __name__ == "__main__":

@@ -138,6 +138,9 @@ Execute exclusively when `<matn_source>` is completely absent:
        8. `إيه رأيك؟` (asking for a student's opinion)
        9. `أنت بتجيب دليل آخر؟` (responding to a student providing evidence)
        10. `الحكاية؟` (prompting for an answer or confirmation)
+       11. `طب دي إيه يعني؟ تدل على إيه؟` (prompting the class to deduce meaning)
+       12. `إيه السؤال طيب؟ اللي عارف السؤال ياخد توفي.` (quizzing the students with a reward)
+       13. `ها؟ تختاروا إيه؟` (asking the class to choose an option)
      - **Disambiguation (Rhetorical vs. Genuine)**: If a cue word (especially `نعم؟`) appears **mid-paragraph** and the Sheikh continues speaking immediately without any topic shift, it is **rhetorical** — do NOT insert a student line. Only treat it as a genuine student prompt when it appears at a natural break point.
      - **Placement**: Sheikh's sentence with cue → new line → `طالب: صوت غير مسموع.` → new line → Sheikh continues.
    - **Zero Hallucination (Unknown Situations)**:

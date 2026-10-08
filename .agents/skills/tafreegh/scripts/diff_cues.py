@@ -54,71 +54,112 @@ def _find_preceding_sentence(lines: list[str], target_index: int) -> str:
     return ""
 
 
+from dataclasses import dataclass
+
+@dataclass
+class CueResult:
+    inserted: list[CueCandidate]
+    removed: list[CueCandidate]
+
+def _collect_cues(
+    normalized_lines: list[str], raw_text: str, start_idx: int, end_idx: int
+) -> list[CueCandidate]:
+    """Helper to collect cues from a range of normalized lines."""
+    candidates = []
+    for idx in range(start_idx, end_idx):
+        line = normalized_lines[idx]
+        if _is_full_inaudible_student_line(line):
+            cue = _find_preceding_sentence(normalized_lines, idx)
+            if cue:
+                raw_lines = raw_text.splitlines()
+                line_number = 0
+                normalized_count = 0
+                for raw_idx, raw_line in enumerate(raw_lines):
+                    if raw_line.strip():
+                        if normalized_count == idx:
+                            line_number = raw_idx + 1
+                            break
+                        normalized_count += 1
+                candidates.append(CueCandidate(
+                    cue_sentence=cue, student_line=line, line_number=line_number
+                ))
+    return candidates
+
 def detect_new_student_cues(
     ai_text: str, corrected_text: str
-) -> list[CueCandidate]:
-    """Detect user-inserted 'طالب: صوت غير مسموع.' lines not present in AI output.
+) -> CueResult:
+    """Detect user-inserted and user-removed 'طالب: صوت غير مسموع.' lines.
 
     Args:
         ai_text: The AI-generated markdown baseline.
         corrected_text: The user-corrected markdown from Word review.
 
     Returns:
-        List of CueCandidate dicts, each containing the preceding Sheikh
-        sentence (cue_sentence), the matched student line, and line number.
+        CueResult containing inserted and removed candidates.
     """
     ai_lines = _normalize_lines(ai_text)
     corrected_lines = _normalize_lines(corrected_text)
 
-    # Use SequenceMatcher to find insertions in the corrected text
     matcher = SequenceMatcher(None, ai_lines, corrected_lines)
-    candidates: list[CueCandidate] = []
+    inserted_candidates: list[CueCandidate] = []
+    removed_candidates: list[CueCandidate] = []
 
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag in ("insert", "replace"):
-            # These are lines in corrected_text that are new/changed
-            for j in range(j1, j2):
-                line = corrected_lines[j]
-                if _is_full_inaudible_student_line(line):
-                    # Find the preceding Sheikh sentence
-                    cue = _find_preceding_sentence(corrected_lines, j)
-                    if cue:
-                        # Calculate 1-based line number in original text
-                        # by finding this line's position in the raw text
-                        raw_lines = corrected_text.splitlines()
-                        line_number = 0
-                        normalized_count = 0
-                        for raw_idx, raw_line in enumerate(raw_lines):
-                            if raw_line.strip():
-                                if normalized_count == j:
-                                    line_number = raw_idx + 1
-                                    break
-                                normalized_count += 1
+            inserted_candidates.extend(_collect_cues(corrected_lines, corrected_text, j1, j2))
+        
+        if tag in ("delete", "replace"):
+            removed_candidates.extend(_collect_cues(ai_lines, ai_text, i1, i2))
 
-                        candidates.append(CueCandidate(
-                            cue_sentence=cue,
-                            student_line=line,
-                            line_number=line_number,
-                        ))
+    return CueResult(inserted=inserted_candidates, removed=removed_candidates)
 
-    return candidates
+def _format_section(title: str, cues: list[CueCandidate], file_label: str, hint: str) -> list[str]:
+    lines = [title, "=" * 60]
+    for i, c in enumerate(cues, 1):
+        lines.append(f"  {i}. عبارة الشيخ السابقة: \"{c['cue_sentence']}\"")
+        lines.append(f"     (سطر {c['line_number']} في {file_label})")
+        lines.append("")
+    lines.append(hint)
+    lines.append("")
+    return lines
 
-
-def format_cue_report(candidates: list[CueCandidate]) -> str:
+def format_cue_report(result: CueResult) -> str:
     """Format candidate cues as a human-readable report for the learning summary."""
-    if not candidates:
+    if not result.inserted and not result.removed:
         return ""
 
-    lines = ["📋 مرشحات تنبيهات محادثة جديدة (تتطلب تأكيد المستخدم):"]
-    lines.append("=" * 60)
+    lines = []
+    if result.inserted:
+        lines.extend(_format_section(
+            "📋 مرشحات تنبيهات محادثة جديدة (تتطلب تأكيد المستخدم):",
+            result.inserted,
+            "الملف المصحح",
+            "💡 لإضافة تنبيه جديد إلى القائمة المعتمدة في SKILL.md، يرجى تأكيد العبارات أعلاه."
+        ))
+        
+    if result.removed:
+        lines.extend(_format_section(
+            "❌ تنبيهات محذوفة من قبل المستخدم (False Positives):",
+            result.removed,
+            "ملف الذكاء الاصطناعي",
+            "💡 يرجى مراجعة هذه الحالات لتحسين فهم النظام للأسئلة البلاغية (Rhetorical vs Genuine)."
+        ))
+        
+    return "\n".join(lines).strip()
 
-    for i, c in enumerate(candidates, 1):
-        lines.append(f"  {i}. عبارة الشيخ السابقة: \"{c['cue_sentence']}\"")
-        lines.append(f"     (سطر {c['line_number']} في الملف المصحح)")
-        lines.append("")
 
-    lines.append(
-        "💡 لإضافة تنبيه جديد إلى القائمة المعتمدة في SKILL.md، "
-        "يرجى تأكيد العبارات أعلاه."
-    )
-    return "\n".join(lines)
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+    
+    if len(sys.argv) < 3:
+        print("Usage: py diff_cues.py <ai_file> <user_file>")
+        sys.exit(1)
+        
+    ai_text = Path(sys.argv[1]).read_text(encoding="utf-8")
+    user_text = Path(sys.argv[2]).read_text(encoding="utf-8")
+    
+    result = detect_new_student_cues(ai_text, user_text)
+    report = format_cue_report(result)
+    if report:
+        print(report)
