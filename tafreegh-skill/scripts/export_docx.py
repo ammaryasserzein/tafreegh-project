@@ -1,5 +1,12 @@
 import sys
+import re
+import shutil
 from pathlib import Path
+import docx
+from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 # Ensure UTF-8 output
 if hasattr(sys.stdout, 'reconfigure'):
@@ -40,27 +47,43 @@ CANONICAL_SUBJECT_NAMES = {
     "روضة الناظر": "شرح مختصر الروضة",
     "صيد": "صيد الخاطر",
     "صيد الخاطر": "صيد الخاطر",
+    "منطق": "المنطق (السلم المنورق)",
+    "المنطق": "المنطق (السلم المنورق)",
+    "سلم": "المنطق (السلم المنورق)",
+    "السلم": "المنطق (السلم المنورق)",
 }
 
 DEFAULT_BASE_ONEDRIVE = Path(r"C:\Users\L\OneDrive\1. دوري")
+DEFAULT_PROJECT_ROOT = Path(r"c:\Users\L\Documents\Tafreegh_Project")
+WORD_BASE_TEMPLATE = DEFAULT_PROJECT_ROOT / "Word base.docx"
+DEFAULT_FONT_NAME = "Traditional Arabic"
+DEFAULT_FONT_SIZE = 18
+
+NOTEBOOKLM_HEADER_PATTERNS = [
+    re.compile(r'^(?:المصادر|مصادر|المصدر|دليل المصدر|دليل مصادر)$', re.IGNORECASE),
+    re.compile(r'^(?:source\s*guide|sources)$', re.IGNORECASE),
+    re.compile(r'^\d{4}-\d{2}-\d{2}[ _]+.*\.(?:mp3|m4a|wav|aac|ogg|opus)$', re.IGNORECASE),
+    re.compile(r'^.*\.(?:mp3|m4a|wav|aac|ogg|opus)$', re.IGNORECASE),
+]
+
 
 def normalize_arabic(text: str) -> str:
     """Normalizes hamzas, wasl, and cleans leading/trailing whitespace."""
     if not text:
         return ""
-    text = text.strip()
-    return text
+    return text.strip()
 
-import re
 
 def parse_metadata(text: str) -> dict:
     """
-    Extracts date, keyword, and clean canonical subject_name from markdown text or raw transcript headers.
+    Extracts date, keyword, audio_file, and clean canonical subject_name
+    from markdown text or raw transcript headers.
     """
     metadata = {
         "date": None,
         "keyword": None,
-        "subject_name": None
+        "subject_name": None,
+        "audio_file": None
     }
     
     # 1. Date extraction (YYYY-MM-DD)
@@ -68,7 +91,14 @@ def parse_metadata(text: str) -> dict:
     if date_match:
         metadata["date"] = date_match.group(1)
         
-    # 2. Subject extraction
+    # 2. Audio file token extraction
+    audio_match = re.search(r'\b(\d{4}-\d{2}-\d{2}[ _]+[^\n\r]+?\.(?:mp3|m4a|wav|aac|ogg|opus))\b', text, re.IGNORECASE)
+    if not audio_match:
+        audio_match = re.search(r'\b([^\n\r]+?\.(?:mp3|m4a|wav|aac|ogg|opus))\b', text, re.IGNORECASE)
+    if audio_match:
+        metadata["audio_file"] = audio_match.group(1).strip()
+        
+    # 3. Subject extraction from explicit label
     subject_match = re.search(r'^(?:اسم المادة|المادة)\s*:\s*([^\n\r]+)', text, re.MULTILINE)
     if subject_match:
         full_subject = subject_match.group(1).strip()
@@ -82,16 +112,38 @@ def parse_metadata(text: str) -> dict:
             clean_sub = re.sub(r'\s*\([^)]*فصل[^)]*\)', '', full_subject).strip()
             metadata["subject_name"] = clean_sub
             
-    # 3. Filename token fallback
+    # 4. Filename token fallback if subject line not present
     if not metadata["keyword"] and metadata["date"]:
-        file_token_match = re.search(r'\b\d{4}-\d{2}-\d{2}\s+([^\s.]+)(?:\.mp3|\.m4a|\.wav)?', text)
+        file_token_match = re.search(r'\b\d{4}-\d{2}-\d{2}\s+([^\s.]+)(?:\.mp3|\.m4a|\.wav|\.aac|\.ogg)?', text)
         if file_token_match:
             metadata["keyword"] = file_token_match.group(1).strip()
             norm_key = normalize_arabic(metadata["keyword"])
             if norm_key in CANONICAL_SUBJECT_NAMES:
                 metadata["subject_name"] = CANONICAL_SUBJECT_NAMES[norm_key]
+            else:
+                metadata["subject_name"] = metadata["keyword"]
                 
+    # 5. Reverse lookup from audio file if keyword still missing
+    if not metadata["keyword"] and metadata["audio_file"]:
+        clean_audio = metadata["audio_file"]
+        for key in CANONICAL_SUBJECT_NAMES:
+            if key in clean_audio:
+                metadata["keyword"] = key
+                metadata["subject_name"] = CANONICAL_SUBJECT_NAMES[key]
+                break
+
     return metadata
+
+
+KEYWORD_FOLDER_HINTS = {
+    "دليل": "معاملات",
+    "دليل الطالب": "معاملات",
+    "رحيق": "سيرة",
+    "سلم": "منطق",
+    "السلم": "منطق",
+    "فتح": "توحيد",
+    "فتح الباري": "توحيد",
+}
 
 def get_onedrive_folder(keyword: str, base_path: Path = DEFAULT_BASE_ONEDRIVE) -> Path:
     """
@@ -102,27 +154,65 @@ def get_onedrive_folder(keyword: str, base_path: Path = DEFAULT_BASE_ONEDRIVE) -
     if not cleaned:
         return base_path / "عام"
         
+    k_search = KEYWORD_FOLDER_HINTS.get(cleaned, cleaned)
     if base_path.exists() and base_path.is_dir():
-        # Clean keyword for fuzzy matching (remove common hamzas)
-        k_clean = cleaned.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+        k_clean = k_search.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
         for d in base_path.iterdir():
             if d.is_dir():
                 d_name_clean = d.name.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
                 if k_clean in d_name_clean:
                     return d
                     
-    # Fallback to creating a new folder if no match found
     return base_path / cleaned
 
-import docx
-from docx.shared import Pt, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
 
-WORD_BASE_TEMPLATE = Path(r"C:\Users\L\Documents\Tafreegh_Project\Word base.docx")
-DEFAULT_FONT_NAME = "Traditional Arabic"
-DEFAULT_FONT_SIZE = 18
+def is_header_line(line: str) -> bool:
+    """Checks if a given line belongs to the standard header block or NotebookLM tags."""
+    l = line.strip()
+    if not l:
+        return True
+    if l in ("بسم الله الرحمن الرحيم", "بسم الله الرحمن الرحيم."):
+        return True
+    if l.startswith("المادة:") or l.startswith("اسم المادة:"):
+        return True
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', l):
+        return True
+    for pat in NOTEBOOKLM_HEADER_PATTERNS:
+        if pat.match(l):
+            return True
+    return False
+
+
+def standardize_transcript_header(markdown_text: str) -> str:
+    """
+    Strips NotebookLM tags (Source guide, audio file names, etc.) and existing headers,
+    returning cleanly standardized markdown beginning with the 3-line centered header.
+    """
+    meta = parse_metadata(markdown_text)
+    clean_subject = meta.get("subject_name") or meta.get("keyword") or "المادة"
+    used_date = meta.get("date") or "تاريخ_غير_محدد"
+    
+    paragraphs = markdown_text.split('\n\n')
+    cleaned_paragraphs = []
+    
+    for para in paragraphs:
+        lines = [line.strip() for line in para.split('\n') if line.strip()]
+        if not lines:
+            continue
+        if all(is_header_line(l) for l in lines):
+            continue
+        while lines and is_header_line(lines[0]):
+            lines.pop(0)
+        if not lines:
+            continue
+        cleaned_paragraphs.append('\n'.join(lines))
+        
+    body = '\n\n'.join(cleaned_paragraphs)
+    header = f"بسم الله الرحمن الرحيم\nالمادة: {clean_subject}\n{used_date}"
+    if body:
+        return f"{header}\n\n{body}"
+    return header
+
 
 def set_p_rtl(p, align=None):
     """Configures paragraph with proper RTL and language attributes."""
@@ -145,6 +235,7 @@ def set_p_rtl(p, align=None):
         lang = OxmlElement('w:lang')
         p_rPr.append(lang)
     lang.set(qn('w:bidi'), "ar-SA")
+
 
 def set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False):
     """Applies Arabic font, size, RTL flag, bidi language, and bold styling (w:b + w:bCs). Strictly black color."""
@@ -183,24 +274,13 @@ def set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bo
         if bCs is not None:
             rPr.remove(bCs)
 
-def is_header_line(line: str) -> bool:
-    """Checks if a given line belongs to the standard 3-line header block."""
-    l = line.strip()
-    if not l:
-        return True
-    if l == "بسم الله الرحمن الرحيم" or l == "بسم الله الرحمن الرحيم.":
-        return True
-    if l.startswith("المادة:") or l.startswith("اسم المادة:"):
-        return True
-    if re.match(r'^\d{4}-\d{2}-\d{2}$', l):
-        return True
-    return False
 
 def create_docx(markdown_text: str, output_path: Path, template_path: Path = WORD_BASE_TEMPLATE) -> Path:
     """
     Converts scholarly transcription markdown into a formatted .docx document.
     Inherits formatting from Word base.docx if available, with 0.5in margins,
     Traditional Arabic 18pt font, black color, bold matn tags (w:bCs), and centered headers.
+    Generates one Word paragraph (^p) per line for seamless Ctrl+Down navigation.
     """
     if template_path and Path(template_path).exists():
         doc = docx.Document(str(template_path))
@@ -259,14 +339,15 @@ def create_docx(markdown_text: str, output_path: Path, template_path: Path = WOR
         if not lines:
             continue
             
-        # Body paragraph (pure RTL flow without forcing LTR alignment)
-        p = doc.add_paragraph()
-        set_p_rtl(p, align=None)
-        
-        for idx, line in enumerate(lines):
-            if idx > 0:
-                p.add_run('\n')
-                
+        # One Word paragraph (^p) per line, never manual line break (^l)
+        for line in lines:
+            # Skip HTML comments like <!-- fallback --> in Word output
+            if line.startswith("<!--") and line.endswith("-->"):
+                continue
+
+            p = doc.add_paragraph()
+            set_p_rtl(p, align=None)
+
             # Full line matn: **(...)** or **...**
             matn_full_match = re.match(r'^\*\*(.+)\*\*$', line)
             if matn_full_match:
@@ -300,11 +381,104 @@ def create_docx(markdown_text: str, output_path: Path, template_path: Path = WOR
     doc.save(str(output_path))
     return output_path
 
-DEFAULT_PROJECT_ROOT = Path(r"c:\Users\L\Documents\Tafreegh_Project")
+
+def normalize_stem(candidate_name: str) -> str:
+    """
+    Strips double extensions (.md.md), trailing extensions (.docx, .md),
+    and suffixes (_AI, _processed, _full, _مقاطع, #AI) per ADR 0002 § 9.
+    """
+    s = candidate_name
+    prev = None
+    while s != prev:
+        prev = s
+        # Strip trailing known suffixes
+        s = re.sub(r'(?:[ _]+(?:AI|processed|full|مقاطع)|#[a-zA-Z0-9]+)+$', '', s, flags=re.IGNORECASE)
+        # Strip trailing extensions (supports single/double extensions)
+        s = re.sub(r'(\.[a-zA-Z0-9_]+)+$', '', s)
+    return s.strip()
+
+
+def is_matching_stem(candidate_name: str, date: str, keyword: str) -> bool:
+    """
+    Returns True if candidate_name matches the (date, keyword) tuple,
+    ignoring delimiter style, extensions, and suffixes per ADR 0002 § 9.
+    """
+    if date not in candidate_name:
+        return False
+
+    cleaned_stem = normalize_stem(candidate_name)
+    stem_rem = cleaned_stem.replace(date, " ").strip(" _-")
+
+    def _normalize_token(t: str) -> str:
+        t = re.sub(r'[أإآٱ]', 'ا', t)
+        t = re.sub(r'ة', 'ه', t)
+        t = re.sub(r'ى', 'ي', t)
+        t = re.sub(r'[_\s]+', ' ', t)
+        return t.strip()
+
+    norm_rem = _normalize_token(stem_rem)
+    norm_kw = _normalize_token(keyword)
+
+    kw_variants = {norm_kw}
+    for k, v in CANONICAL_SUBJECT_NAMES.items():
+        if _normalize_token(k) == norm_kw or _normalize_token(v) == norm_kw:
+            kw_variants.add(_normalize_token(k))
+            kw_variants.add(_normalize_token(v))
+
+    return any(v in norm_rem for v in kw_variants)
+
+
+def archive_processed_inputs(
+    date: str,
+    keyword: str,
+    project_root: Path = DEFAULT_PROJECT_ROOT
+) -> dict:
+    """
+    Moves matching raw inputs and matn sources into processed/ subfolders,
+    and removes reproducible chunk folders (_مقاطع/).
+    03_AI_Outputs remains flat and untouched.
+    """
+    project_root = Path(project_root)
+    matn_dir = project_root / "01_Matn_Sources"
+    raw_dir = project_root / "02_Raw_Inputs"
+    
+    matn_processed = matn_dir / "processed"
+    raw_processed = raw_dir / "processed"
+    matn_processed.mkdir(parents=True, exist_ok=True)
+    raw_processed.mkdir(parents=True, exist_ok=True)
+    
+    archived_matn = []
+    archived_raw = []
+    deleted_chunks = []
+    
+    if matn_dir.exists():
+        for item in matn_dir.iterdir():
+            if item.is_file() and is_matching_stem(item.name, date, keyword):
+                dest = matn_processed / item.name
+                shutil.move(str(item), str(dest))
+                archived_matn.append(dest)
+                
+    if raw_dir.exists():
+        for item in raw_dir.iterdir():
+            if is_matching_stem(item.name, date, keyword):
+                if item.is_dir() and "_مقاطع" in item.name:
+                    shutil.rmtree(str(item))
+                    deleted_chunks.append(item)
+                elif item.is_file():
+                    dest = raw_processed / item.name
+                    shutil.move(str(item), str(dest))
+                    archived_raw.append(dest)
+                    
+    return {
+        "matn_files": archived_matn,
+        "raw_files": archived_raw,
+        "deleted_chunk_dirs": deleted_chunks
+    }
+
 
 def export_documents(
     markdown_text: str,
-    original_md_path: Path,
+    original_md_path: Path = None,
     keyword: str = None,
     date: str = None,
     base_onedrive: Path = DEFAULT_BASE_ONEDRIVE,
@@ -312,7 +486,11 @@ def export_documents(
 ) -> dict:
     """
     Exports a .docx to OneDrive and saves the AI baseline .md into 03_AI_Outputs.
+    Strips raw NotebookLM source tags and standardizes the 3-line header.
+    On confirmed export, atomically archives input files into processed/.
     """
+    project_root = Path(project_root)
+    clean_md = standardize_transcript_header(markdown_text)
     meta = parse_metadata(markdown_text)
     used_date = date or meta.get("date") or "تاريخ_غير_محدد"
     used_keyword = keyword or meta.get("keyword") or "عام"
@@ -329,7 +507,7 @@ def export_documents(
             onedrive_file = onedrive_file.with_name(f"{base_stem} ({counter}){onedrive_file.suffix}")
             counter += 1
             
-    create_docx(markdown_text, onedrive_file)
+    create_docx(clean_md, onedrive_file)
     
     # 2. Target Project path (md)
     project_dir = project_root / "03_AI_Outputs"
@@ -340,12 +518,23 @@ def export_documents(
     
     # AI baseline MD file
     project_file = project_dir / f"{used_date}_{subject_clean}_AI.md"
-    project_file.write_text(markdown_text, encoding='utf-8')
+    project_file.write_text(clean_md, encoding='utf-8')
     
+    # 3. Atomic archiving
+    archived_info = None
+    if onedrive_file.exists() and project_file.exists():
+        archived_info = archive_processed_inputs(used_date, used_keyword, project_root=project_root)
+        
     return {
         "onedrive_file": onedrive_file,
-        "project_file": project_file
+        "project_file": project_file,
+        "archived": archived_info
     }
+
+
+# Backwards compatibility alias
+export_dual_copies = export_documents
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -364,3 +553,5 @@ if __name__ == "__main__":
     results = export_documents(content, md_path, keyword=cli_keyword, date=cli_date)
     print(f"✓ OneDrive docx exported: {results['onedrive_file']}")
     print(f"✓ Project baseline MD saved: {results['project_file']}")
+    if results.get("archived"):
+        print(f"✓ Archived inputs: {len(results['archived']['matn_files'])} matn, {len(results['archived']['raw_files'])} raw")
