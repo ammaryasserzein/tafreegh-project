@@ -128,6 +128,24 @@ def resolve_header_line_3(identity: LectureIdentity) -> str:
     return identity.header_line_3
 
 
+def resolve_document_identity(
+    markdown_text: str,
+    identity: LectureIdentity | None = None,
+) -> LectureIdentity:
+    """
+    Parses transcript metadata and merges explicit caller overrides.
+    If caller explicitly provided a lecture_number override without a date,
+    prioritizes numbered lecture formatting over parsed text date.
+    """
+    parsed = parse_metadata(markdown_text)
+    if identity:
+        ident = parsed.merge(identity)
+        if identity.lecture_number and not identity.date:
+            ident.date = None
+        return ident
+    return parsed
+
+
 def standardize_transcript_header(
     markdown_text: str,
     identity: LectureIdentity | None = None,
@@ -136,9 +154,7 @@ def standardize_transcript_header(
     Strips NotebookLM tags (Source guide, audio file names, etc.) and existing headers,
     returning cleanly standardized markdown beginning with the 3-line centered header.
     """
-    parsed = parse_metadata(markdown_text)
-    ident = parsed.merge(identity) if identity else parsed
-    
+    ident = resolve_document_identity(markdown_text, identity)
     clean_subject = ident.resolved_subject
     third_line = ident.header_line_3
     
@@ -258,8 +274,7 @@ def create_docx(
         s.left_margin = Inches(0.5)
         s.right_margin = Inches(0.5)
         
-    parsed = parse_metadata(markdown_text)
-    ident = parsed.merge(identity) if identity else parsed
+    ident = resolve_document_identity(markdown_text, identity)
     clean_subject = ident.resolved_subject
     third_line = ident.header_line_3
     

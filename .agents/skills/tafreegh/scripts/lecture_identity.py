@@ -282,24 +282,6 @@ class LectureIdentity:
             return self
         get_val = (lambda k: other.get(k)) if hasattr(other, 'get') else (lambda k: getattr(other, k, None))
 
-        other_date = get_val("date")
-        other_lec = get_val("lecture_number")
-        has_other_date = other_date is not None and str(other_date).strip() != ""
-        has_other_lec = other_lec is not None and str(other_lec).strip() != ""
-
-        if has_other_lec and not has_other_date:
-            target_date = None
-            target_lec = str(other_lec)
-        elif has_other_date and not has_other_lec:
-            target_date = str(other_date)
-            target_lec = None
-        elif has_other_date and has_other_lec:
-            target_date = str(other_date)
-            target_lec = str(other_lec)
-        else:
-            target_date = self.date
-            target_lec = self.lecture_number
-
         def _pick(field: str) -> str | None:
             val_other = get_val(field)
             if val_other is not None and str(val_other).strip() != "":
@@ -307,8 +289,8 @@ class LectureIdentity:
             return getattr(self, field)
 
         return LectureIdentity(
-            date=target_date,
-            lecture_number=target_lec,
+            date=_pick("date"),
+            lecture_number=_pick("lecture_number"),
             keyword=_pick("keyword"),
             subject_name=_pick("subject_name"),
             audio_file=_pick("audio_file"),
@@ -355,14 +337,10 @@ class LectureIdentity:
         for k, v in rm.items():
             k_norm = _normalize_token(k)
             v_norm = _normalize_token(v)
-            for st in list(seed_tokens):
-                if st == k_norm or st == v_norm:
+            for token in list(seed_tokens):
+                if token == k_norm or token == v_norm or (len(token) >= 3 and (token in v_norm or v_norm in token)):
                     kw_variants.add(k_norm)
                     kw_variants.add(v_norm)
-                elif len(st) >= 3 and (st in v_norm or v_norm in st):
-                    kw_variants.add(k_norm)
-                    kw_variants.add(v_norm)
-
 
         # 2. Date-based matching (YYYY-MM-DD)
         if self.date and re.match(r'^\d{4}-\d{2}-\d{2}$', str(self.date)):
@@ -372,7 +350,7 @@ class LectureIdentity:
                 return True
             stem_rem = cleaned_cand.replace(str(self.date), " ").strip(" _-")
             norm_rem = _normalize_token(stem_rem)
-            return any(v in norm_rem for v in kw_variants)
+            return any(v in norm_rem or norm_rem in v for v in kw_variants)
 
         # 3. Numbered stem matching
         target_num = self.lecture_number or (str(self.date) if self.date and str(self.date).isdigit() else None)

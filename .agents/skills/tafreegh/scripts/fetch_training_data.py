@@ -20,16 +20,23 @@ RAW_INPUTS_DIR = PROJECT_ROOT / "02_Raw_Inputs"
 
 
 def _find_ai_baseline(
-    identity: LectureIdentity,
+    date_str: str = "",
+    subject: str = "",
+    filename_stem: str = "",
+    identity: LectureIdentity | None = None,
 ) -> Path | None:
     """Search for the corresponding _AI.md baseline file in known directories using LectureIdentity."""
-    ident = identity
+    ident = identity or LectureIdentity(
+        date=date_str or None,
+        stem=filename_stem or None,
+        subject_name=subject or None,
+    )
     candidate_names = []
     if ident.stem:
         candidate_names.append(f"{ident.stem}_AI.md")
     if ident.resolved_stem:
         candidate_names.append(f"{ident.resolved_stem}_AI.md")
-    subj = ident.subject_name
+    subj = ident.subject_name or subject
     if ident.date and subj:
         candidate_names.append(f"{ident.date}_{subj}_AI.md")
     elif ident.date:
@@ -122,7 +129,7 @@ def main():
         print(f"Saved extracted text to {md_filepath} (Original docx kept safe in OneDrive)")
 
         # --- Diff Loop: detect new student cue candidates ---
-        ai_baseline = _find_ai_baseline(identity=identity)
+        ai_baseline = _find_ai_baseline(identity=identity, subject=subject)
         if ai_baseline:
             ai_text = ai_baseline.read_text(encoding='utf-8')
             result = detect_new_student_cues(ai_text, text)

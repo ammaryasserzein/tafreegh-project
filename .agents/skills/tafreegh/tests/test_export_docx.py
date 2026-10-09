@@ -25,6 +25,7 @@ from export_docx import (
     archive_processed_inputs,
     is_matching_stem,
     normalize_stem,
+    resolve_document_identity,
     _extract_candidate_query,
     _format_segment_output,
     CANONICAL_SUBJECT_NAMES,
@@ -709,11 +710,16 @@ class TestLectureIdentity(unittest.TestCase):
         self.assertEqual(merged.lecture_number, "2")  # overridden
         self.assertEqual(merged.subject_name, "سيرة (الرحيق المختوم)")  # overridden
 
-        # Overriding a date-based lecture with an explicit numbered lecture clears date to prioritize numbered routing
+        # Non-destructive merge preserves unspecified fields from base
         base_date = LectureIdentity(date="2026-10-09", subject_name="سيرة قديمة")
         merged_num = base_date.merge(override)
         self.assertEqual(merged_num.lecture_number, "2")
-        self.assertIsNone(merged_num.date)
+        self.assertEqual(merged_num.date, "2026-10-09")
+
+        # Document resolution prioritizes explicit numbered lecture override over parsed date
+        resolved = resolve_document_identity("بسم الله الرحمن الرحيم\n2026-10-09", override)
+        self.assertEqual(resolved.lecture_number, "2")
+        self.assertIsNone(resolved.date)
 
     def test_lecture_identity_matching_date_and_numbered(self):
         # Date match
