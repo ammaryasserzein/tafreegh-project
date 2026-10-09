@@ -217,8 +217,36 @@ Source guide
         self.assertTrue(clean.startswith("بسم الله الرحمن الرحيم\nالمادة: فقه البيوع (سعد الخثلان)\nالمحاضرة: 17"))
         self.assertIn("الحمد لله رب العالمين", clean)
 
+    def test_standardize_transcript_header_override_precedence(self):
+        # Caller's explicit identity override must take precedence over markdown header
+        raw = """بسم الله الرحمن الرحيم
+المادة: قديم
+2026-01-01
+
+الحمد لله رب العالمين."""
+        override = LectureIdentity(lecture_number="5", subject_name="فقه جديد")
+        clean = standardize_transcript_header(raw, identity=override)
+        self.assertTrue(clean.startswith("بسم الله الرحمن الرحيم\nالمادة: فقه جديد\nالمحاضرة: 5"))
+        self.assertNotIn("قديم", clean)
+
 
 class TestCreateDocx(unittest.TestCase):
+    def test_create_docx_override_precedence(self):
+        sample_md = """بسم الله الرحمن الرحيم
+المادة: قديم
+2026-01-01
+
+الحمد لله رب العالمين."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = Path(tmp_dir) / "output.docx"
+            override = LectureIdentity(lecture_number="5", subject_name="فقه جديد")
+            create_docx(sample_md, out_file, identity=override)
+            doc = docx.Document(str(out_file))
+            p_texts = [p.text for p in doc.paragraphs]
+            self.assertIn("المادة: فقه جديد", p_texts)
+            self.assertIn("المحاضرة: 5", p_texts)
+            self.assertNotIn("المادة: قديم", p_texts)
+
     def test_create_docx_produces_valid_formatted_file(self):
         sample_md = """بسم الله الرحمن الرحيم
 المادة: زاد المعاد (فصل في حجة أبي بكر الصديق رضي الله عنه)
@@ -348,7 +376,7 @@ class TestArchiveProcessedInputs(unittest.TestCase):
             (matn_dir / "2026-10-03__معاملات.md").write_text("other matn", encoding="utf-8")
             (raw_dir / "2026-10-03 معاملات.md").write_text("other raw", encoding="utf-8")
 
-            res = archive_processed_inputs(date="2026-10-01", keyword="سيرة", project_root=root)
+            res = archive_processed_inputs(LectureIdentity(date="2026-10-01", keyword="سيرة"), project_root=root)
 
             # Assert moved files exist in processed/
             self.assertTrue((matn_dir / "processed" / "2026-10-01__سيرة.md").exists())
@@ -414,41 +442,41 @@ class TestIsMatchingStem(unittest.TestCase):
         )
 
     def test_is_matching_stem_standard_match(self):
-        self.assertTrue(is_matching_stem("2026-10-01_سيرة.md", "2026-10-01", "سيرة"))
+        self.assertTrue(is_matching_stem("2026-10-01_سيرة.md", LectureIdentity(date="2026-10-01", keyword="سيرة")))
 
     def test_is_matching_stem_double_extension(self):
-        self.assertTrue(is_matching_stem("2026-10-01_سيرة.md.md", "2026-10-01", "سيرة"))
+        self.assertTrue(is_matching_stem("2026-10-01_سيرة.md.md", LectureIdentity(date="2026-10-01", keyword="سيرة")))
 
     def test_is_matching_stem_suffixes_ai_full_and_processed(self):
-        self.assertTrue(is_matching_stem("2026-09-19_منطق_(السلم_المنورق)_AI_full.md", "2026-09-19", "منطق"))
-        self.assertTrue(is_matching_stem("2026-10-01_سيرة_processed.docx", "2026-10-01", "سيرة"))
-        self.assertTrue(is_matching_stem("2026-08-29_لب_الأصول_AI.md", "2026-08-29", "لب"))
+        self.assertTrue(is_matching_stem("2026-09-19_منطق_(السلم_المنورق)_AI_full.md", LectureIdentity(date="2026-09-19", keyword="منطق")))
+        self.assertTrue(is_matching_stem("2026-10-01_سيرة_processed.docx", LectureIdentity(date="2026-10-01", keyword="سيرة")))
+        self.assertTrue(is_matching_stem("2026-08-29_لب_الأصول_AI.md", LectureIdentity(date="2026-08-29", keyword="لب")))
 
     def test_is_matching_stem_chunk_folder_suffix(self):
-        self.assertTrue(is_matching_stem("2026-10-01  سيرة.md_مقاطع", "2026-10-01", "سيرة"))
+        self.assertTrue(is_matching_stem("2026-10-01  سيرة.md_مقاطع", LectureIdentity(date="2026-10-01", keyword="سيرة")))
 
     def test_is_matching_stem_delimiter_variations(self):
-        self.assertTrue(is_matching_stem("2026-09-24__رياض.md", "2026-09-24", "رياض"))
-        self.assertTrue(is_matching_stem("2026-09-24  رياض.md", "2026-09-24", "رياض"))
+        self.assertTrue(is_matching_stem("2026-09-24__رياض.md", LectureIdentity(date="2026-09-24", keyword="رياض")))
+        self.assertTrue(is_matching_stem("2026-09-24  رياض.md", LectureIdentity(date="2026-09-24", keyword="رياض")))
 
     def test_is_matching_stem_different_keyword_rejects(self):
-        self.assertFalse(is_matching_stem("2026-09-19_منطق_AI.md", "2026-09-19", "سيرة"))
+        self.assertFalse(is_matching_stem("2026-09-19_منطق_AI.md", LectureIdentity(date="2026-09-19", keyword="سيرة")))
 
     def test_is_matching_stem_different_date_rejects(self):
-        self.assertFalse(is_matching_stem("2026-09-20_سيرة.md", "2026-09-19", "سيرة"))
+        self.assertFalse(is_matching_stem("2026-09-20_سيرة.md", LectureIdentity(date="2026-09-19", keyword="سيرة")))
 
     def test_is_matching_stem_numbered_stem(self):
-        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", None, "بيوع", stem="17-فقه_البيوع_17"))
-        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", None, "بيوع", lecture_number="17"))
-        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", "17", "بيوع"))
-        self.assertTrue(is_matching_stem("17-فقه_البيوع_17_AI.md", None, "فقه_البيوع", lecture_number="17"))
-        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", None, "بيوع", lecture_number="18"))
-        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", None, "رياض", lecture_number="17"))
+        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="بيوع", stem="17-فقه_البيوع_17")))
+        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="بيوع", lecture_number="17")))
+        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(date="17", keyword="بيوع")))
+        self.assertTrue(is_matching_stem("17-فقه_البيوع_17_AI.md", LectureIdentity(keyword="فقه_البيوع", lecture_number="17")))
+        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="بيوع", lecture_number="18")))
+        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="رياض", lecture_number="17")))
 
     def test_is_matching_stem_numbered_stem_requires_target_num(self):
         # A numbered candidate must NOT match when no target_num or stem is provided
-        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", None, "بيوع"))
-        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", "", "فقه البيوع"))
+        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="بيوع")))
+        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="فقه البيوع")))
 
 
 class TestExportNumberedDocuments(unittest.TestCase):
@@ -673,17 +701,40 @@ class TestLectureIdentity(unittest.TestCase):
         self.assertEqual(merged.keyword, "بيوع")
         self.assertEqual(merged.subject_name, "فقه البيوع (سعد الخثلان)")
 
+    def test_lecture_identity_merge_override_precedence(self):
+        # Explicit override in 'other' must supersede non-empty value in 'base'
+        base = LectureIdentity(lecture_number="1", subject_name="سيرة قديمة")
+        override = LectureIdentity(lecture_number="2", subject_name="سيرة (الرحيق المختوم)")
+        merged = base.merge(override)
+        self.assertEqual(merged.lecture_number, "2")  # overridden
+        self.assertEqual(merged.subject_name, "سيرة (الرحيق المختوم)")  # overridden
+
+        # Overriding a date-based lecture with an explicit numbered lecture clears date to prioritize numbered routing
+        base_date = LectureIdentity(date="2026-10-09", subject_name="سيرة قديمة")
+        merged_num = base_date.merge(override)
+        self.assertEqual(merged_num.lecture_number, "2")
+        self.assertIsNone(merged_num.date)
+
     def test_lecture_identity_matching_date_and_numbered(self):
         # Date match
         ident_date = LectureIdentity(date="2026-09-24", keyword="رياض")
         self.assertTrue(ident_date.matches("2026-09-24__رياض.md"))
         self.assertFalse(ident_date.matches("2026-09-25__رياض.md"))
 
-        # Mirrored numbered match
+        # Mirrored numbered match with keyword
         ident_num = LectureIdentity(lecture_number="17", keyword="بيوع")
         self.assertTrue(ident_num.matches("17-فقه_البيوع_17.md"))
         self.assertTrue(ident_num.matches("17-بيوع-17.docx"))
         self.assertFalse(ident_num.matches("18-فقه_البيوع_18.md"))
+
+    def test_lecture_identity_matching_with_subject_name_only(self):
+        # Identity instantiated with only subject_name (no keyword) must derive tokens and match stems
+        ident_subj = LectureIdentity(lecture_number="17", subject_name="فقه البيوع (سعد الخثلان)")
+        self.assertTrue(ident_subj.matches("17-فقه_البيوع_17.md"))
+        self.assertTrue(ident_subj.matches("17-بيوع-17.docx"))
+        self.assertFalse(ident_subj.matches("18-فقه_البيوع_18.md"))
+        self.assertFalse(ident_subj.matches("17-رياض-17.md"))
+
 
 
 class TestCanonicalRoutingSSOT(unittest.TestCase):
@@ -714,6 +765,23 @@ class TestCanonicalRoutingSSOT(unittest.TestCase):
             self.assertEqual(routing.get("واسطية"), "العقيدة الواسطية")
             self.assertEqual(routing.get("العقيدة"), "العقيدة الواسطية")
             self.assertEqual(routing.get("الواسطية"), "العقيدة الواسطية")
+
+    def test_load_canonical_routing_with_swapped_columns(self):
+        # Table where subject column comes first, keywords second
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            custom_context = Path(tmp_dir) / "CONTEXT.md"
+            custom_context.write_text(
+                "## 3. توجيه المتون (Routing Map)\n\n"
+                "| المادة المعتمدة | الكلمة الدلالية |\n"
+                "| --- | --- |\n"
+                "| **أصول الفقه** | `(أصول)` / `(ورقات)` |\n",
+                encoding="utf-8"
+            )
+            routing = load_canonical_routing(custom_context)
+            self.assertEqual(routing.get("أصول"), "أصول الفقه")
+            self.assertEqual(routing.get("ورقات"), "أصول الفقه")
+            self.assertEqual(routing.get("أصول الفقه"), "أصول الفقه")
+
 
 
 if __name__ == "__main__":

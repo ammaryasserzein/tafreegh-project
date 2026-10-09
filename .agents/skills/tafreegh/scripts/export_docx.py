@@ -123,23 +123,13 @@ def is_header_line(line: str) -> bool:
     return False
 
 
-def resolve_header_line_3(
-    date: str | None = None,
-    lecture_number: str | None = None,
-    identity: LectureIdentity | None = None,
-) -> str:
+def resolve_header_line_3(identity: LectureIdentity) -> str:
     """Resolves the third header line deterministically (date, lecture number, or fallback)."""
-    if identity:
-        return identity.header_line_3
-    ident = LectureIdentity(date=date, lecture_number=lecture_number)
-    return ident.header_line_3
+    return identity.header_line_3
 
 
 def standardize_transcript_header(
     markdown_text: str,
-    date: str | None = None,
-    lecture_number: str | None = None,
-    subject_name: str | None = None,
     identity: LectureIdentity | None = None,
 ) -> str:
     """
@@ -147,10 +137,7 @@ def standardize_transcript_header(
     returning cleanly standardized markdown beginning with the 3-line centered header.
     """
     parsed = parse_metadata(markdown_text)
-    if identity:
-        ident = parsed.merge(identity)
-    else:
-        ident = parsed.merge(LectureIdentity(date=date, lecture_number=lecture_number, subject_name=subject_name))
+    ident = parsed.merge(identity) if identity else parsed
     
     clean_subject = ident.resolved_subject
     third_line = ident.header_line_3
@@ -244,9 +231,6 @@ def create_docx(
     markdown_text: str,
     output_path: Path,
     template_path: Path = WORD_BASE_TEMPLATE,
-    date: str | None = None,
-    lecture_number: str | None = None,
-    subject_name: str | None = None,
     identity: LectureIdentity | None = None,
 ) -> Path:
     """
@@ -275,10 +259,7 @@ def create_docx(
         s.right_margin = Inches(0.5)
         
     parsed = parse_metadata(markdown_text)
-    if identity:
-        ident = parsed.merge(identity)
-    else:
-        ident = parsed.merge(LectureIdentity(date=date, lecture_number=lecture_number, subject_name=subject_name))
+    ident = parsed.merge(identity) if identity else parsed
     clean_subject = ident.resolved_subject
     third_line = ident.header_line_3
     
@@ -386,35 +367,26 @@ def format_thousands(text: str) -> str:
 
 def is_matching_stem(
     candidate_name: str,
-    date: str | None = None,
-    keyword: str = "",
-    stem: str | None = None,
-    lecture_number: str | None = None,
-    identity: LectureIdentity | None = None,
+    identity: LectureIdentity,
 ) -> bool:
     """
     Returns True if candidate_name matches the given lecture identifier,
-    supporting both (date, keyword) tuples and numbered lecture stems
-    (e.g. 17-فقه_البيوع_17) per ADR 0002 § 9 and ADR 0004.
+    supporting exact stem matches, date matches, and mirrored numbered stems
+    per ADR 0002 § 9, ADR 0004, and ADR 0005.
     """
-    ident = identity or LectureIdentity(date=date, keyword=keyword, stem=stem, lecture_number=lecture_number)
-    return ident.matches(candidate_name, routing_map=CANONICAL_SUBJECT_NAMES)
+    return identity.matches(candidate_name, routing_map=CANONICAL_SUBJECT_NAMES)
 
 
 def archive_processed_inputs(
-    date: str | None = None,
-    keyword: str = "",
+    identity: LectureIdentity,
     project_root: Path = DEFAULT_PROJECT_ROOT,
-    stem: str | None = None,
-    lecture_number: str | None = None,
-    identity: LectureIdentity | None = None,
 ) -> dict:
     """
     Moves matching raw inputs and matn sources into processed/ subfolders,
     and removes reproducible chunk folders (_مقاطع/).
     03_AI_Outputs remains flat and untouched.
     """
-    ident = identity or LectureIdentity(date=date, keyword=keyword, stem=stem, lecture_number=lecture_number)
+    ident = identity
     project_root = Path(project_root)
     matn_dir = project_root / "01_Matn_Sources"
     raw_dir = project_root / "02_Raw_Inputs"
@@ -475,18 +447,14 @@ def verify_isolated_segment(text: str) -> bool:
 
 
 def find_matching_matn_source(
-    date: str | None = None,
-    keyword: str = "",
+    identity: LectureIdentity,
     project_root: Path = DEFAULT_PROJECT_ROOT,
-    stem: str | None = None,
-    lecture_number: str | None = None,
-    identity: LectureIdentity | None = None,
 ) -> Path | None:
     """
     Locates a matching canonical Matn source file in 01_Matn_Sources/
     or 01_Matn_Sources/processed/ (if reprocessing).
     """
-    ident = identity or LectureIdentity(date=date, keyword=keyword, stem=stem, lecture_number=lecture_number)
+    ident = identity
     project_root = Path(project_root)
     matn_dir = project_root / "01_Matn_Sources"
     if not matn_dir.exists():
@@ -708,10 +676,8 @@ def export_documents(
     if identity:
         ident = ident.merge(identity)
 
-    if date:
-        ident.date = date
-    if keyword:
-        ident.keyword = keyword
+    if date or keyword:
+        ident = ident.merge(LectureIdentity(date=date, keyword=keyword))
 
     clean_md = standardize_transcript_header(
         markdown_text,

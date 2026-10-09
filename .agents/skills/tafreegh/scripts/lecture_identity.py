@@ -74,6 +74,10 @@ def load_canonical_routing(context_path: Path | None = None) -> dict[str, str]:
     in_section_3 = False
     in_table = False
 
+    kw_col_idx = 0
+    subj_col_idx = 1
+    header_found = False
+
     for line in lines:
         stripped = line.strip()
         if has_section_3:
@@ -93,15 +97,36 @@ def load_canonical_routing(context_path: Path | None = None) -> dict[str, str]:
             continue
 
         cells = [c.strip() for c in re.split(r"(?<!\\)\|", stripped)[1:-1]]
-        if not cells or "الكلمة الدلالية" in cells[0] or re.match(r"^:?-+:?$", cells[0]):
+        if not cells:
+            continue
+
+        # Check for markdown table separator row: | --- | --- |
+        if all(re.match(r"^:?-+:?$", c) for c in cells):
             in_table = True
             continue
 
+        # Dynamic header detection
+        if not header_found:
+            found_kw = None
+            found_subj = None
+            for idx, cell in enumerate(cells):
+                norm_c = normalize_arabic(cell)
+                if any(w in norm_c for w in ("الكلمة", "الدلالية", "keyword")):
+                    found_kw = idx
+                elif any(w in norm_c for w in ("المادة", "المعتمدة", "subject")):
+                    found_subj = idx
+            if found_kw is not None or found_subj is not None:
+                header_found = True
+                in_table = True
+                if found_kw is not None:
+                    kw_col_idx = found_kw
+                if found_subj is not None:
+                    subj_col_idx = found_subj
+                continue
+
         in_table = True
-        keyword_cell = cells[0]
-        
-        # Column 1 contains canonical subject name (in both 2-column and 3-column formats)
-        subject_cell = cells[1] if len(cells) > 1 else ""
+        keyword_cell = cells[kw_col_idx] if kw_col_idx < len(cells) else cells[0]
+        subject_cell = cells[subj_col_idx] if subj_col_idx < len(cells) else (cells[1] if len(cells) > 1 else cells[0])
 
         # Extract bold text if present: **subject**
         bold_match = re.search(r"\*\*([^*]+)\*\*", subject_cell)
@@ -249,17 +274,45 @@ class LectureIdentity:
         return self.subject_name or self.keyword or "المادة"
 
     def merge(self, other: LectureIdentity | dict | None) -> LectureIdentity:
-        """Returns a new LectureIdentity filling in None fields from other."""
+        """
+        Returns a new LectureIdentity where non-empty fields from other override self,
+        while fields not specified in other are preserved from self.
+        """
         if not other:
             return self
         get_val = (lambda k: other.get(k)) if hasattr(other, 'get') else (lambda k: getattr(other, k, None))
+
+        other_date = get_val("date")
+        other_lec = get_val("lecture_number")
+        has_other_date = other_date is not None and str(other_date).strip() != ""
+        has_other_lec = other_lec is not None and str(other_lec).strip() != ""
+
+        if has_other_lec and not has_other_date:
+            target_date = None
+            target_lec = str(other_lec)
+        elif has_other_date and not has_other_lec:
+            target_date = str(other_date)
+            target_lec = None
+        elif has_other_date and has_other_lec:
+            target_date = str(other_date)
+            target_lec = str(other_lec)
+        else:
+            target_date = self.date
+            target_lec = self.lecture_number
+
+        def _pick(field: str) -> str | None:
+            val_other = get_val(field)
+            if val_other is not None and str(val_other).strip() != "":
+                return str(val_other)
+            return getattr(self, field)
+
         return LectureIdentity(
-            date=self.date or get_val("date"),
-            lecture_number=self.lecture_number or get_val("lecture_number"),
-            keyword=self.keyword or get_val("keyword"),
-            subject_name=self.subject_name or get_val("subject_name"),
-            audio_file=self.audio_file or get_val("audio_file"),
-            stem=self.stem or get_val("stem"),
+            date=target_date,
+            lecture_number=target_lec,
+            keyword=_pick("keyword"),
+            subject_name=_pick("subject_name"),
+            audio_file=_pick("audio_file"),
+            stem=_pick("stem"),
         )
 
     def matches(
@@ -285,15 +338,31 @@ class LectureIdentity:
             return t.strip()
 
         rm = routing_map if routing_map is not None else CANONICAL_ROUTING
-        norm_kw = _normalize_token(self.keyword or "")
-        kw_variants = {norm_kw} if norm_kw else set()
-        
+
+        seed_tokens: set[str] = set()
+        if self.keyword:
+            seed_tokens.add(_normalize_token(self.keyword))
+        if self.subject_name:
+            norm_subj = _normalize_token(self.subject_name)
+            if norm_subj:
+                seed_tokens.add(norm_subj)
+            clean_sub = re.sub(r'\(.*?\)', '', self.subject_name).strip()
+            norm_clean = _normalize_token(clean_sub)
+            if norm_clean:
+                seed_tokens.add(norm_clean)
+
+        kw_variants: set[str] = set(seed_tokens)
         for k, v in rm.items():
             k_norm = _normalize_token(k)
             v_norm = _normalize_token(v)
-            if norm_kw and (k_norm == norm_kw or v_norm == norm_kw):
-                kw_variants.add(k_norm)
-                kw_variants.add(v_norm)
+            for st in list(seed_tokens):
+                if st == k_norm or st == v_norm:
+                    kw_variants.add(k_norm)
+                    kw_variants.add(v_norm)
+                elif len(st) >= 3 and (st in v_norm or v_norm in st):
+                    kw_variants.add(k_norm)
+                    kw_variants.add(v_norm)
+
 
         # 2. Date-based matching (YYYY-MM-DD)
         if self.date and re.match(r'^\d{4}-\d{2}-\d{2}$', str(self.date)):
