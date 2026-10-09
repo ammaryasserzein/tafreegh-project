@@ -5,6 +5,10 @@ import datetime
 from pathlib import Path
 import read_docx
 from diff_cues import detect_new_student_cues, format_cue_report
+try:
+    from lecture_identity import LectureIdentity
+except ImportError:
+    from .lecture_identity import LectureIdentity
 
 ONEDRIVE_BASE = r"C:\Users\L\OneDrive\1. دوري"
 # Hardcoding the project root to avoid Arabic character mangling bugs in Python's resolve()
@@ -15,20 +19,51 @@ AI_OUTPUTS_DIR = PROJECT_ROOT / "03_AI_Outputs"
 RAW_INPUTS_DIR = PROJECT_ROOT / "02_Raw_Inputs"
 
 
-def _find_ai_baseline(date_str: str, subject: str, filename_stem: str) -> Path | None:
-    """Search for the corresponding _AI.md baseline file in known directories."""
-    candidate_name = f"{date_str}_{subject}_AI.md"
-    candidate_name_stem = f"{filename_stem}_AI.md"
+def _find_ai_baseline(
+    date_str: str = "",
+    subject: str = "",
+    filename_stem: str = "",
+    identity: LectureIdentity | None = None,
+) -> Path | None:
+    """Search for the corresponding _AI.md baseline file in known directories using LectureIdentity."""
+    ident = identity or LectureIdentity(
+        date=date_str or None,
+        stem=filename_stem or None,
+        subject_name=subject or None,
+    )
+
+    candidate_names = []
+    if ident.stem:
+        candidate_names.append(f"{ident.stem}_AI.md")
+    if ident.resolved_stem:
+        candidate_names.append(f"{ident.resolved_stem}_AI.md")
+    if ident.date and subject:
+        candidate_names.append(f"{ident.date}_{subject}_AI.md")
+    elif ident.date:
+        candidate_names.append(f"{ident.date}_AI.md")
+
     for directory in (AI_OUTPUTS_DIR, RAW_INPUTS_DIR):
-        for candidate in (directory / candidate_name_stem, directory / candidate_name):
-            if candidate.exists():
-                return candidate
-    # Fallback: search by date prefix in both dirs
+        if not directory.exists():
+            continue
+        for c_name in candidate_names:
+            cand = directory / c_name
+            if cand.exists():
+                return cand
+
+    # Match via LectureIdentity domain matching
     for directory in (AI_OUTPUTS_DIR, RAW_INPUTS_DIR):
         if directory.exists():
             for f in directory.iterdir():
-                if f.name.startswith(date_str) and f.name.endswith("_AI.md"):
+                if f.name.endswith("_AI.md") and ident.matches(f.name):
                     return f
+
+    # Fallback: search by date prefix in both dirs if date is known
+    if ident.date:
+        for directory in (AI_OUTPUTS_DIR, RAW_INPUTS_DIR):
+            if directory.exists():
+                for f in directory.iterdir():
+                    if f.name.startswith(ident.date) and f.name.endswith("_AI.md"):
+                        return f
     return None
 
 
@@ -57,19 +92,22 @@ def main():
         
         # Clean subject name: remove prefix numbers like "1. " or "2. "
         subject = re.sub(r'^\d+\.\s*', '', subject_folder)
-        
-        # Extract date from filename if it's in the format YYYY-MM-DD
         filename_stem = p.stem
-        date_match = re.search(r'\d{4}-\d{2}-\d{2}', filename_stem)
         
-        if date_match:
-            date_str = date_match.group(0)
+        identity = LectureIdentity.from_filename(p.name, fallback_subject=subject)
+
+        if identity.date:
+            date_str = identity.date
             md_filename = f"{date_str}_{subject}.md"
+        elif identity.lecture_number:
+            date_str = None
+            md_filename = f"{identity.resolved_stem}.md"
         else:
             # Fallback to file modification date
             mtime = os.path.getmtime(docx_path)
             date_str = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
             md_filename = f"{date_str}_{subject}_{filename_stem}.md"
+            identity.date = date_str
         
         md_filepath = TRAINING_DATA_DIR / md_filename
         
@@ -91,7 +129,7 @@ def main():
         print(f"Saved extracted text to {md_filepath} (Original docx kept safe in OneDrive)")
 
         # --- Diff Loop: detect new student cue candidates ---
-        ai_baseline = _find_ai_baseline(date_str, subject, filename_stem)
+        ai_baseline = _find_ai_baseline(identity=identity, subject=subject)
         if ai_baseline:
             ai_text = ai_baseline.read_text(encoding='utf-8')
             result = detect_new_student_cues(ai_text, text)

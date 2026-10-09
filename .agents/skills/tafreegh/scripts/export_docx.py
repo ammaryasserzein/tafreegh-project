@@ -18,6 +18,13 @@ try:
         MatnMatchResult,
         generate_fallback_summary,
     )
+    from lecture_identity import (
+        LectureIdentity,
+        load_canonical_routing,
+        normalize_stem,
+        normalize_arabic,
+        match_canonical_subject,
+    )
 except ImportError:
     from .matn_matcher import (
         SequentialMatnMatcher,
@@ -25,56 +32,20 @@ except ImportError:
         MatnMatchResult,
         generate_fallback_summary,
     )
+    from .lecture_identity import (
+        LectureIdentity,
+        load_canonical_routing,
+        normalize_stem,
+        normalize_arabic,
+        match_canonical_subject,
+    )
 
 # Ensure UTF-8 output
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-CANONICAL_SUBJECT_NAMES = {
-    "اسماء": "الأسماء الحسنى",
-    "أسماء": "الأسماء الحسنى",
-    "الاسماء": "الأسماء الحسنى",
-    "الأسماء": "الأسماء الحسنى",
-    "رياض": "رياض الصالحين",
-    "رياض الصالحين": "رياض الصالحين",
-    "سيرة": "سيرة (الرحيق المختوم)",
-    "السيرة": "سيرة (الرحيق المختوم)",
-    "رحيق": "سيرة (الرحيق المختوم)",
-    "معاملات": "دليل الطالب (كتاب البيع)",
-    "المعاملات": "دليل الطالب (كتاب البيع)",
-    "دليل": "دليل الطالب (كتاب البيع)",
-    "دليل الطالب": "دليل الطالب (كتاب البيع)",
-    "توحيد": "فتح الباري (كتاب التوحيد)",
-    "التوحيد": "فتح الباري (كتاب التوحيد)",
-    "فتح": "فتح الباري (كتاب التوحيد)",
-    "فتح الباري": "فتح الباري (كتاب التوحيد)",
-    "لب": "لب الأصول",
-    "لب الاصول": "لب الأصول",
-    "لب الأصول": "لب الأصول",
-    "اصول": "لب الأصول",
-    "أصول": "لب الأصول",
-    "الاصول": "لب الأصول",
-    "الأصول": "لب الأصول",
-    "ديوان": "ديوان الشافعي",
-    "ديوان الشافعي": "ديوان الشافعي",
-    "زاد": "زاد المعاد",
-    "زاد المعاد": "زاد المعاد",
-    "روضة": "شرح مختصر الروضة",
-    "الروضة": "شرح مختصر الروضة",
-    "مختصر الروضة": "شرح مختصر الروضة",
-    "روضة الناظر": "شرح مختصر الروضة",
-    "صيد": "صيد الخاطر",
-    "صيد الخاطر": "صيد الخاطر",
-    "منطق": "المنطق (السلم المنورق)",
-    "المنطق": "المنطق (السلم المنورق)",
-    "سلم": "المنطق (السلم المنورق)",
-    "السلم": "المنطق (السلم المنورق)",
-    "بيوع": "فقه البيوع (سعد الخثلان)",
-    "البيوع": "فقه البيوع (سعد الخثلان)",
-    "فقه البيوع": "فقه البيوع (سعد الخثلان)",
-    "فقه_البيوع": "فقه البيوع (سعد الخثلان)",
-    "خثلان": "فقه البيوع (سعد الخثلان)",
-}
+# Dynamic single source of truth from CONTEXT.md Section 3
+CANONICAL_SUBJECT_NAMES = load_canonical_routing()
 
 DEFAULT_BASE_ONEDRIVE = Path(r"C:\Users\L\OneDrive\1. دوري")
 DEFAULT_PROJECT_ROOT = Path(r"c:\Users\L\Documents\Tafreegh_Project")
@@ -90,113 +61,13 @@ NOTEBOOKLM_HEADER_PATTERNS = [
 ]
 
 
-def normalize_arabic(text: str) -> str:
-    """Normalizes hamzas, wasl, and cleans leading/trailing whitespace."""
-    if not text:
-        return ""
-    t = text.strip()
-    t = re.sub(r'[أإآٱ]', 'ا', t)
-    t = re.sub(r'\s+', ' ', t)
-    return t.strip()
-
-
-def match_canonical_subject(text: str) -> tuple[str | None, str | None]:
-    """Matches text against CANONICAL_SUBJECT_NAMES in descending length order."""
-    if not text:
-        return None, None
-    norm_text = normalize_arabic(text)
-    for key in sorted(CANONICAL_SUBJECT_NAMES.keys(), key=len, reverse=True):
-        if normalize_arabic(key) in norm_text:
-            return key, CANONICAL_SUBJECT_NAMES[key]
-    return None, None
-
-
-def parse_metadata(text: str) -> dict:
+def parse_metadata(text: str) -> LectureIdentity:
     """
     Extracts date, keyword, audio_file, clean canonical subject_name,
     and lecture_number from markdown text, filenames, or raw transcript headers.
+    Returns a LectureIdentity domain entity with dict compatibility.
     """
-    metadata = {
-        "date": None,
-        "keyword": None,
-        "subject_name": None,
-        "audio_file": None,
-        "lecture_number": None,
-    }
-    
-    # 1. Date extraction (YYYY-MM-DD)
-    date_match = re.search(r'\b(\d{4}-\d{2}-\d{2})\b', text)
-    if date_match:
-        metadata["date"] = date_match.group(1)
-
-    # 2. Lecture number from explicit label (المحاضرة: 17)
-    lec_match = re.search(r'^(?:المحاضرة|محاضرة|الدرس|درس)\s*:\s*(\d+)', text, re.MULTILINE)
-    if lec_match:
-        metadata["lecture_number"] = lec_match.group(1).strip()
-        
-    # 3. Audio file token extraction
-    audio_match = re.search(r'\b(\d{4}-\d{2}-\d{2}[ _]+[^\n\r]+?\.(?:mp3|m4a|wav|aac|ogg|opus))\b', text, re.IGNORECASE)
-    if not audio_match:
-        audio_match = re.search(r'\b([^\n\r]+?\.(?:mp3|m4a|wav|aac|ogg|opus))\b', text, re.IGNORECASE)
-    if audio_match:
-        metadata["audio_file"] = audio_match.group(1).strip()
-
-    # 4. Mirrored numbered stem pattern (e.g. 17-فقه_البيوع_17 or 17-بيوع-17)
-    # Strictly exclude dates by requiring middle part to be non-digit Arabic text and mirrored numbers
-    numbered_stem_match = re.search(r'\b(\d+)[-_]([^\s\d\n\r]+?)[-_](\d+)\b', text)
-    if numbered_stem_match:
-        n1 = numbered_stem_match.group(1)
-        stem_middle = numbered_stem_match.group(2).strip()
-        n2 = numbered_stem_match.group(3)
-        if n1 == n2:
-            metadata["lecture_number"] = n1
-            if not metadata["keyword"]:
-                clean_middle = stem_middle.replace("_", " ").strip()
-                canonical_key, canonical_subj = match_canonical_subject(clean_middle)
-                if canonical_key:
-                    metadata["keyword"] = canonical_key
-                    metadata["subject_name"] = canonical_subj
-                else:
-                    metadata["keyword"] = clean_middle
-        
-    # 5. Subject extraction from explicit label (المادة: ...)
-    subject_match = re.search(r'^(?:اسم المادة|المادة)\s*:\s*([^\n\r]+)', text, re.MULTILINE)
-    if subject_match:
-        full_subject = subject_match.group(1).strip()
-        first_word = re.split(r'[\s(]', full_subject)[0].strip()
-        norm_key = normalize_arabic(first_word)
-        if norm_key in CANONICAL_SUBJECT_NAMES:
-            metadata["keyword"] = first_word
-            metadata["subject_name"] = CANONICAL_SUBJECT_NAMES[norm_key]
-        else:
-            canonical_key, canonical_subj = match_canonical_subject(full_subject)
-            if canonical_key:
-                metadata["keyword"] = canonical_key
-                metadata["subject_name"] = canonical_subj
-            else:
-                clean_sub = re.sub(r'\s*\([^)]*فصل[^)]*\)', '', full_subject).strip()
-                metadata["keyword"] = first_word
-                metadata["subject_name"] = clean_sub
-            
-    # 6. Filename token fallback if subject line not present
-    if not metadata["keyword"] and metadata["date"]:
-        file_token_match = re.search(r'\b\d{4}-\d{2}-\d{2}\s+([^\s.]+)(?:\.mp3|\.m4a|\.wav|\.aac|\.ogg)?', text)
-        if file_token_match:
-            metadata["keyword"] = file_token_match.group(1).strip()
-            norm_key = normalize_arabic(metadata["keyword"])
-            if norm_key in CANONICAL_SUBJECT_NAMES:
-                metadata["subject_name"] = CANONICAL_SUBJECT_NAMES[norm_key]
-            else:
-                metadata["subject_name"] = metadata["keyword"]
-                
-    # 7. Reverse lookup from audio file if keyword still missing
-    if not metadata["keyword"] and metadata["audio_file"]:
-        canonical_key, canonical_subj = match_canonical_subject(metadata["audio_file"])
-        if canonical_key:
-            metadata["keyword"] = canonical_key
-            metadata["subject_name"] = canonical_subj
-
-    return metadata
+    return LectureIdentity.from_text(text, routing_map=CANONICAL_SUBJECT_NAMES)
 
 
 KEYWORD_FOLDER_HINTS = {
@@ -207,7 +78,7 @@ KEYWORD_FOLDER_HINTS = {
     "السلم": "منطق",
     "فتح": "توحيد",
     "فتح الباري": "توحيد",
-    **{k: CANONICAL_SUBJECT_NAMES[k] for k in ("بيوع", "البيوع", "فقه البيوع", "فقه_البيوع", "خثلان")},
+    **{k: CANONICAL_SUBJECT_NAMES[k] for k in CANONICAL_SUBJECT_NAMES if "بيوع" in k or "خثلان" in k},
 }
 
 def get_onedrive_folder(keyword: str, base_path: Path = DEFAULT_BASE_ONEDRIVE) -> Path:
@@ -252,13 +123,16 @@ def is_header_line(line: str) -> bool:
     return False
 
 
-def resolve_header_line_3(date: str | None = None, lecture_number: str | None = None) -> str:
+def resolve_header_line_3(
+    date: str | None = None,
+    lecture_number: str | None = None,
+    identity: LectureIdentity | None = None,
+) -> str:
     """Resolves the third header line deterministically (date, lecture number, or fallback)."""
-    if date:
-        return str(date)
-    if lecture_number:
-        return f"المحاضرة: {lecture_number}"
-    return "تاريخ_غير_محدد"
+    if identity:
+        return identity.header_line_3
+    ident = LectureIdentity(date=date, lecture_number=lecture_number)
+    return ident.header_line_3
 
 
 def standardize_transcript_header(
@@ -266,16 +140,20 @@ def standardize_transcript_header(
     date: str | None = None,
     lecture_number: str | None = None,
     subject_name: str | None = None,
+    identity: LectureIdentity | None = None,
 ) -> str:
     """
     Strips NotebookLM tags (Source guide, audio file names, etc.) and existing headers,
     returning cleanly standardized markdown beginning with the 3-line centered header.
     """
-    meta = parse_metadata(markdown_text)
-    clean_subject = subject_name or meta.get("subject_name") or meta.get("keyword") or "المادة"
-    used_date = date or meta.get("date")
-    lec_num = lecture_number or meta.get("lecture_number")
-    third_line = resolve_header_line_3(used_date, lec_num)
+    parsed = parse_metadata(markdown_text)
+    if identity:
+        ident = parsed.merge(identity)
+    else:
+        ident = parsed.merge(LectureIdentity(date=date, lecture_number=lecture_number, subject_name=subject_name))
+    
+    clean_subject = ident.resolved_subject
+    third_line = ident.header_line_3
     
     paragraphs = markdown_text.split('\n\n')
     cleaned_paragraphs = []
@@ -369,6 +247,7 @@ def create_docx(
     date: str | None = None,
     lecture_number: str | None = None,
     subject_name: str | None = None,
+    identity: LectureIdentity | None = None,
 ) -> Path:
     """
     Converts scholarly transcription markdown into a formatted .docx document.
@@ -395,11 +274,13 @@ def create_docx(
         s.left_margin = Inches(0.5)
         s.right_margin = Inches(0.5)
         
-    meta = parse_metadata(markdown_text)
-    clean_subject = subject_name or meta.get("subject_name") or "المادة"
-    used_date = date or meta.get("date")
-    lec_num = lecture_number or meta.get("lecture_number")
-    third_line = resolve_header_line_3(used_date, lec_num)
+    parsed = parse_metadata(markdown_text)
+    if identity:
+        ident = parsed.merge(identity)
+    else:
+        ident = parsed.merge(LectureIdentity(date=date, lecture_number=lecture_number, subject_name=subject_name))
+    clean_subject = ident.resolved_subject
+    third_line = ident.header_line_3
     
     # 1. P0: بسم الله الرحمن الرحيم (Centered)
     p0 = doc.add_paragraph()
@@ -452,15 +333,11 @@ def create_docx(
 
             matn_full_match = re.match(r'^\*\*(.+)\*\*$', line)
             if matn_full_match:
-                p_before = doc.add_paragraph()
-                set_p_rtl(p_before, align=None)
                 p = doc.add_paragraph()
                 set_p_rtl(p, align=None)
                 matn_content = matn_full_match.group(1)
                 run = p.add_run(matn_content)
                 set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=True)
-                p_after = doc.add_paragraph()
-                set_p_rtl(p_after, align=None)
                 continue
 
             p = doc.add_paragraph()
@@ -525,84 +402,37 @@ def normalize_stem(candidate_name: str) -> str:
 
 def is_matching_stem(
     candidate_name: str,
-    date: str | None,
-    keyword: str,
+    date: str | None = None,
+    keyword: str = "",
     stem: str | None = None,
     lecture_number: str | None = None,
+    identity: LectureIdentity | None = None,
 ) -> bool:
     """
     Returns True if candidate_name matches the given lecture identifier,
     supporting both (date, keyword) tuples and numbered lecture stems
     (e.g. 17-فقه_البيوع_17) per ADR 0002 § 9 and ADR 0004.
     """
-    cleaned_cand = normalize_stem(candidate_name)
-
-    # 1. Exact stem match if stem is explicitly provided
-    if stem and normalize_stem(stem) == cleaned_cand:
-        return True
-
-    def _normalize_token(t: str) -> str:
-        t = normalize_arabic(t)
-        t = re.sub(r'ة', 'ه', t)
-        t = re.sub(r'ى', 'ي', t)
-        t = re.sub(r'[_\s]+', ' ', t)
-        return t.strip()
-
-    norm_kw = _normalize_token(keyword)
-    kw_variants = {norm_kw}
-    for k, v in CANONICAL_SUBJECT_NAMES.items():
-        k_norm = _normalize_token(k)
-        v_norm = _normalize_token(v)
-        if k_norm == norm_kw or v_norm == norm_kw:
-            kw_variants.add(k_norm)
-            kw_variants.add(v_norm)
-
-    # 2. Date-based matching (YYYY-MM-DD)
-    if date and re.match(r'^\d{4}-\d{2}-\d{2}$', str(date)):
-        if str(date) not in candidate_name:
-            return False
-        stem_rem = cleaned_cand.replace(str(date), " ").strip(" _-")
-        norm_rem = _normalize_token(stem_rem)
-        return any(v in norm_rem for v in kw_variants)
-
-    # 3. Numbered stem matching
-    target_num = lecture_number or (str(date) if date and str(date).isdigit() else None)
-    if not target_num and stem:
-        stem_num_match = re.search(r'\b(\d+)\b', stem)
-        if stem_num_match:
-            target_num = stem_num_match.group(1)
-
-    cand_numbered = re.match(r'^(\d+)[-_](.+?)[-_](\d+)$', cleaned_cand)
-    if cand_numbered:
-        n1, middle, n2 = cand_numbered.group(1), cand_numbered.group(2), cand_numbered.group(3)
-        if n1 == n2:  # Mirrored stem
-            if not target_num or str(target_num) != n1:
-                return False
-            norm_mid = _normalize_token(middle)
-            return any(v in norm_mid or norm_mid in v for v in kw_variants)
-
-    # 4. Fallback: check if target_num and keyword variant appear in cleaned_cand
-    if target_num:
-        cand_numbers = re.findall(r'\b\d+\b', cleaned_cand)
-        if str(target_num) in cand_numbers:
-            norm_cand = _normalize_token(cleaned_cand)
-            return any(v in norm_cand for v in kw_variants)
-
-    return False
+    if identity:
+        return identity.matches(candidate_name, routing_map=CANONICAL_SUBJECT_NAMES)
+    ident = LectureIdentity(date=date, keyword=keyword, stem=stem, lecture_number=lecture_number)
+    return ident.matches(candidate_name, routing_map=CANONICAL_SUBJECT_NAMES)
 
 
 def archive_processed_inputs(
-    date: str | None,
-    keyword: str,
+    date: str | None = None,
+    keyword: str = "",
     project_root: Path = DEFAULT_PROJECT_ROOT,
     stem: str | None = None,
     lecture_number: str | None = None,
+    identity: LectureIdentity | None = None,
 ) -> dict:
     """
     Moves matching raw inputs and matn sources into processed/ subfolders,
     and removes reproducible chunk folders (_مقاطع/).
     03_AI_Outputs remains flat and untouched.
     """
+    ident = identity or LectureIdentity(date=date, keyword=keyword, stem=stem, lecture_number=lecture_number)
     project_root = Path(project_root)
     matn_dir = project_root / "01_Matn_Sources"
     raw_dir = project_root / "02_Raw_Inputs"
@@ -618,14 +448,14 @@ def archive_processed_inputs(
     
     if matn_dir.exists():
         for item in matn_dir.iterdir():
-            if item.is_file() and is_matching_stem(item.name, date, keyword, stem=stem, lecture_number=lecture_number):
+            if item.is_file() and is_matching_stem(item.name, identity=ident):
                 dest = matn_processed / item.name
                 shutil.move(str(item), str(dest))
                 archived_matn.append(dest)
                 
     if raw_dir.exists():
         for item in raw_dir.iterdir():
-            if is_matching_stem(item.name, date, keyword, stem=stem, lecture_number=lecture_number):
+            if is_matching_stem(item.name, identity=ident):
                 if item.is_dir() and "_مقاطع" in item.name:
                     shutil.rmtree(str(item))
                     deleted_chunks.append(item)
@@ -663,16 +493,18 @@ def verify_isolated_segment(text: str) -> bool:
 
 
 def find_matching_matn_source(
-    date: str | None,
-    keyword: str,
+    date: str | None = None,
+    keyword: str = "",
     project_root: Path = DEFAULT_PROJECT_ROOT,
     stem: str | None = None,
     lecture_number: str | None = None,
+    identity: LectureIdentity | None = None,
 ) -> Path | None:
     """
     Locates a matching canonical Matn source file in 01_Matn_Sources/
     or 01_Matn_Sources/processed/ (if reprocessing).
     """
+    ident = identity or LectureIdentity(date=date, keyword=keyword, stem=stem, lecture_number=lecture_number)
     project_root = Path(project_root)
     matn_dir = project_root / "01_Matn_Sources"
     if not matn_dir.exists():
@@ -680,14 +512,14 @@ def find_matching_matn_source(
 
     # Check unarchived sources first
     for item in matn_dir.iterdir():
-        if item.is_file() and is_matching_stem(item.name, date, keyword, stem=stem, lecture_number=lecture_number):
+        if item.is_file() and is_matching_stem(item.name, identity=ident):
             return item
 
     # Check processed/ subdirectory if reprocessing
     processed_dir = matn_dir / "processed"
     if processed_dir.exists():
         for item in processed_dir.iterdir():
-            if item.is_file() and is_matching_stem(item.name, date, keyword, stem=stem, lecture_number=lecture_number):
+            if item.is_file() and is_matching_stem(item.name, identity=ident):
                 return item
 
     return None
@@ -876,6 +708,7 @@ def export_documents(
     base_onedrive: Path = DEFAULT_BASE_ONEDRIVE,
     project_root: Path = DEFAULT_PROJECT_ROOT,
     matn_source_path: Path = None,
+    identity: LectureIdentity | None = None,
 ) -> dict:
     """
     Exports a .docx to OneDrive and saves the AI baseline .md into 03_AI_Outputs.
@@ -884,46 +717,53 @@ def export_documents(
     On confirmed export, atomically archives input files into processed/.
     """
     project_root = Path(project_root)
-    meta = parse_metadata(markdown_text)
+    ident = parse_metadata(markdown_text)
     
     if original_md_path:
-        path_meta = parse_metadata(Path(original_md_path).name)
-        for k, v in path_meta.items():
-            if not meta.get(k) and v:
-                meta[k] = v
+        path_ident = parse_metadata(Path(original_md_path).name)
+        path_ident.stem = normalize_stem(Path(original_md_path).name)
+        ident = ident.merge(path_ident)
 
-    used_date = date or meta.get("date")
-    lecture_number = meta.get("lecture_number")
-    used_keyword = keyword or meta.get("keyword") or "عام"
-    clean_subject = meta.get("subject_name") or (CANONICAL_SUBJECT_NAMES.get(used_keyword) if used_keyword in CANONICAL_SUBJECT_NAMES else used_keyword)
+    if identity:
+        ident = ident.merge(identity)
+
+    if date:
+        ident.date = date
+    if keyword:
+        ident.keyword = keyword
+
+    used_date = ident.date
+    lecture_number = ident.lecture_number
+    used_keyword = ident.keyword or "عام"
+    clean_subject = ident.subject_name or (CANONICAL_SUBJECT_NAMES.get(used_keyword) if used_keyword in CANONICAL_SUBJECT_NAMES else used_keyword)
+    ident.subject_name = clean_subject
 
     clean_md = standardize_transcript_header(
         markdown_text,
-        date=used_date,
-        lecture_number=lecture_number,
-        subject_name=clean_subject,
+        identity=ident,
     )
     clean_md = format_thousands(clean_md)
     
     # Derive input_stem
-    input_stem = None
-    if original_md_path:
-        input_stem = normalize_stem(Path(original_md_path).name)
-    elif lecture_number:
-        stem_match = re.search(r'\b(\d+[-_][^\s\n\r]+?[-_]\d+)\b', markdown_text)
-        if stem_match:
-            input_stem = normalize_stem(stem_match.group(1))
+    if not ident.stem:
+        if original_md_path:
+            ident.stem = normalize_stem(Path(original_md_path).name)
+        elif lecture_number:
+            stem_match = re.search(r'\b(\d+[-_][^\s\n\r]+?[-_]\d+)\b', markdown_text)
+            if stem_match:
+                ident.stem = normalize_stem(stem_match.group(1))
+            else:
+                subj_token = re.sub(r'[\\/*?:"<>|()]', '', clean_subject).strip().replace(" ", "_")
+                ident.stem = f"{lecture_number}-{subj_token}_{lecture_number}"
+        elif used_date:
+            ident.stem = used_date
         else:
-            subj_token = re.sub(r'[\\/*?:"<>|()]', '', clean_subject).strip().replace(" ", "_")
-            input_stem = f"{lecture_number}-{subj_token}_{lecture_number}"
-    elif used_date:
-        input_stem = used_date
-    else:
-        input_stem = "تاريخ_غير_محدد"
+            ident.stem = "تاريخ_غير_محدد"
+    input_stem = ident.resolved_stem
     
     # 1. Matn Matching & Interleaving
     target_matn_file = matn_source_path or find_matching_matn_source(
-        used_date, used_keyword, project_root, stem=input_stem, lecture_number=lecture_number
+        project_root=project_root, identity=ident
     )
     matcher = None
     if target_matn_file and Path(target_matn_file).exists():
@@ -953,16 +793,14 @@ def export_documents(
     create_docx(
         clean_md,
         onedrive_file,
-        date=used_date,
-        lecture_number=lecture_number,
-        subject_name=clean_subject,
+        identity=ident,
     )
     
     # 3. Target Project path (md)
     project_dir = project_root / "03_AI_Outputs"
     project_dir.mkdir(parents=True, exist_ok=True)
     
-    subject_part = meta.get("subject_name") or used_keyword
+    subject_part = ident.subject_name or used_keyword
     subject_clean = re.sub(r'[\\/*?:"<>|()]', "", subject_part).strip().replace(" ", "_")
     
     if used_date:
@@ -982,7 +820,7 @@ def export_documents(
     archived_info = None
     if onedrive_file.exists() and project_file.exists():
         archived_info = archive_processed_inputs(
-            used_date, used_keyword, project_root=project_root, stem=input_stem, lecture_number=lecture_number
+            project_root=project_root, identity=ident
         )
         
     return {

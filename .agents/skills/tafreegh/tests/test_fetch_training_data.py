@@ -61,6 +61,35 @@ class TestFetchTrainingData(unittest.TestCase):
         fetch_training_data.main()
         
         self.mock_extract.assert_not_called()
+
+    def test_numbered_lecture_extraction_and_baseline_matching(self):
+        # 1. Setup mock OneDrive structure for numbered lecture
+        subject_dir = Path(fetch_training_data.ONEDRIVE_BASE) / "فقه البيوع (سعد الخثلان)" / "(تم التسليم)"
+        os.makedirs(subject_dir, exist_ok=True)
         
+        docx_path = subject_dir / "17-فقه_البيوع_17.docx"
+        with open(docx_path, 'w', encoding='utf-8') as f:
+            f.write("dummy docx content")
+
+        # 2. Setup mock AI baseline in 03_AI_Outputs
+        os.makedirs(self.base_dir / "03_AI_Outputs", exist_ok=True)
+        fetch_training_data.AI_OUTPUTS_DIR = self.base_dir / "03_AI_Outputs"
+        ai_baseline_path = fetch_training_data.AI_OUTPUTS_DIR / "17-فقه_البيوع_17_AI.md"
+        ai_baseline_path.write_text("الحمد لله رب العالمين\nنعم؟\nطالب: صوت غير مسموع.", encoding="utf-8")
+
+        # 3. Run script
+        fetch_training_data.main()
+
+        # 4. Assert training markdown was created using numbered stem
+        expected_md_path = fetch_training_data.TRAINING_DATA_DIR / "17-فقه_البيوع_17.md"
+        self.assertTrue(expected_md_path.exists(), "Numbered lecture markdown should be created as 17-فقه_البيوع_17.md")
+
+        # 5. Direct test of _find_ai_baseline with LectureIdentity
+        from lecture_identity import LectureIdentity
+        ident = LectureIdentity(lecture_number="17", stem="17-فقه_البيوع_17", keyword="بيوع")
+        found = fetch_training_data._find_ai_baseline(identity=ident)
+        self.assertEqual(found, ai_baseline_path)
+
+
 if __name__ == '__main__':
     unittest.main()

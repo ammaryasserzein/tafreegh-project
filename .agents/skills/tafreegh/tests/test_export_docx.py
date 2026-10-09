@@ -27,6 +27,11 @@ from export_docx import (
     normalize_stem,
     _extract_candidate_query,
     _format_segment_output,
+    CANONICAL_SUBJECT_NAMES,
+)
+from lecture_identity import (
+    LectureIdentity,
+    load_canonical_routing,
 )
 from matn_matcher import MatnMatchResult, MatchMode
 
@@ -601,6 +606,108 @@ class TestExportDocxHelpers(unittest.TestCase):
             _format_segment_output(res, is_standalone=False),
             "(ده كلام عامي خالص مش كدا؟)"
         )
+
+
+class TestLectureIdentity(unittest.TestCase):
+    def test_lecture_identity_fields_and_mapping_protocol(self):
+        ident = LectureIdentity(
+            date="2026-10-09",
+            lecture_number="17",
+            keyword="بيوع",
+            subject_name="فقه البيوع (سعد الخثلان)",
+            audio_file="17-فقه_البيوع_17.mp3",
+            stem="17-فقه_البيوع_17",
+        )
+        # Attribute access
+        self.assertEqual(ident.date, "2026-10-09")
+        self.assertEqual(ident.lecture_number, "17")
+        self.assertEqual(ident.keyword, "بيوع")
+
+        # Dict / Mapping access
+        self.assertEqual(ident["date"], "2026-10-09")
+        self.assertEqual(ident.get("keyword"), "بيوع")
+        self.assertEqual(ident.get("missing", "default_val"), "default_val")
+        self.assertIn("lecture_number", ident)
+
+        # Mutability via mapping protocol
+        ident["keyword"] = "فقه_البيوع"
+        self.assertEqual(ident.keyword, "فقه_البيوع")
+
+    def test_lecture_identity_header_line_3(self):
+        # 1. Date precedence
+        ident_date = LectureIdentity(date="2026-09-18", lecture_number="5")
+        self.assertEqual(ident_date.header_line_3, "2026-09-18")
+
+        # 2. Numbered lecture without date
+        ident_num = LectureIdentity(lecture_number="17")
+        self.assertEqual(ident_num.header_line_3, "المحاضرة: 17")
+
+        # 3. Fallback when neither is present
+        ident_none = LectureIdentity()
+        self.assertEqual(ident_none.header_line_3, "تاريخ_غير_محدد")
+
+    def test_lecture_identity_resolved_stem(self):
+        # 1. Explicit stem
+        ident1 = LectureIdentity(stem="custom-stem_01")
+        self.assertEqual(ident1.resolved_stem, "custom-stem_01")
+
+        # 2. Numbered lecture stem derivation
+        ident2 = LectureIdentity(lecture_number="17", subject_name="فقه البيوع (سعد الخثلان)")
+        self.assertEqual(ident2.resolved_stem, "17-فقه_البيوع_سعد_الخثلان_17")
+
+        # 3. Date fallback
+        ident3 = LectureIdentity(date="2026-10-01")
+        self.assertEqual(ident3.resolved_stem, "2026-10-01")
+
+    def test_lecture_identity_merge(self):
+        base = LectureIdentity(date="2026-10-09")
+        other = LectureIdentity(keyword="بيوع", subject_name="فقه البيوع (سعد الخثلان)")
+        merged = base.merge(other)
+        self.assertEqual(merged.date, "2026-10-09")
+        self.assertEqual(merged.keyword, "بيوع")
+        self.assertEqual(merged.subject_name, "فقه البيوع (سعد الخثلان)")
+
+    def test_lecture_identity_matching_date_and_numbered(self):
+        # Date match
+        ident_date = LectureIdentity(date="2026-09-24", keyword="رياض")
+        self.assertTrue(ident_date.matches("2026-09-24__رياض.md"))
+        self.assertFalse(ident_date.matches("2026-09-25__رياض.md"))
+
+        # Mirrored numbered match
+        ident_num = LectureIdentity(lecture_number="17", keyword="بيوع")
+        self.assertTrue(ident_num.matches("17-فقه_البيوع_17.md"))
+        self.assertTrue(ident_num.matches("17-بيوع-17.docx"))
+        self.assertFalse(ident_num.matches("18-فقه_البيوع_18.md"))
+
+
+class TestCanonicalRoutingSSOT(unittest.TestCase):
+    def test_canonical_routing_loads_from_context_md(self):
+        self.assertGreater(len(CANONICAL_SUBJECT_NAMES), 30)
+        # Verify core subjects are mapped dynamically from CONTEXT.md
+        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("بيوع"), "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("خثلان"), "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("فقه_البيوع"), "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("سيرة"), "سيرة (الرحيق المختوم)")
+        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("رحيق"), "سيرة (الرحيق المختوم)")
+        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("منطق"), "المنطق (السلم المنورق)")
+        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("سلم"), "المنطق (السلم المنورق)")
+        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("زاد"), "زاد المعاد")
+
+    def test_load_canonical_routing_from_custom_table(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            custom_context = Path(tmp_dir) / "CONTEXT.md"
+            custom_context.write_text(
+                "## 3. توجيه المتون (Routing Map)\n\n"
+                "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
+                "| --- | --- | --- |\n"
+                "| `(عقيدة)` / `(واسطية)` | **العقيدة الواسطية** | الواسطية لشيخ الإسلام |\n",
+                encoding="utf-8"
+            )
+            routing = load_canonical_routing(custom_context)
+            self.assertEqual(routing.get("عقيدة"), "العقيدة الواسطية")
+            self.assertEqual(routing.get("واسطية"), "العقيدة الواسطية")
+            self.assertEqual(routing.get("العقيدة"), "العقيدة الواسطية")
+            self.assertEqual(routing.get("الواسطية"), "العقيدة الواسطية")
 
 
 if __name__ == "__main__":

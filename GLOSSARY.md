@@ -39,3 +39,7 @@ _Avoid_: Prompt pollution, syntax leakage, literal backticks
 **Numbered Lecture Stem**:
 A lecture file naming convention that uses mirrored sequential lecture numbers instead of a Gregorian date (`YYYY-MM-DD`), structured as `[N]-[subject]_[N]` (e.g., `17-فقه_البيوع_17`). Matched across `01_Matn_Sources/` and `02_Raw_Inputs/` by mirrored integer identifiers and canonical keyword tokens.
 _Avoid_: Date stem, unnumbered lecture, arbitrary filename
+
+**Lecture Identity**:
+A consolidated domain entity encapsulating the core identifying primitives of a lecture (`date`, `lecture_number`, `keyword`, `subject_name`, `stem`, `audio_file`). Replaces dispersed data clumps across export and training pipelines, providing unified resolution of header lines, canonical names, and cross-directory stem matching.
+_Avoid_: Identity primitives, metadata tuple, stem dict

@@ -55,6 +55,22 @@ class TestParagraphBreaks(unittest.TestCase):
             ],
         )
 
+    def test_no_empty_paragraphs_injected_around_matn(self) -> None:
+        doc = self._build()
+        # All paragraphs after the 3 headers must be non-empty (no ^p^p double gaps)
+        body_all = [p.text.strip() for p in doc.paragraphs[3:]]
+        self.assertEqual(
+            body_all,
+            [
+                "السطر الأول من الفقرة.",
+                "(نص المتن في سطر مستقل)",
+                "طالب: صوت غير مسموع.",
+                "فقرة مستقلة بعد سطر فارغ.",
+            ],
+            "No empty paragraphs should be injected around standalone matn",
+        )
+        self.assertEqual(len(doc.paragraphs), 7, "Total paragraphs must equal 3 headers + 4 body lines without empty gap paragraphs")
+
     def test_split_lines_keep_rtl_and_bold(self) -> None:
         doc = self._build()
         matn_p = next(p for p in doc.paragraphs if "نص المتن" in p.text)
