@@ -61,6 +61,22 @@ class CueResult:
     inserted: list[CueCandidate]
     removed: list[CueCandidate]
 
+    def __len__(self) -> int:
+        return len(self.inserted)
+
+    def __getitem__(self, index: int) -> CueCandidate:
+        return self.inserted[index]
+
+    def __iter__(self):
+        return iter(self.inserted)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, list):
+            return self.inserted == other and not self.removed
+        if isinstance(other, CueResult):
+            return self.inserted == other.inserted and self.removed == other.removed
+        return False
+
 def _collect_cues(
     normalized_lines: list[str], raw_text: str, start_idx: int, end_idx: int
 ) -> list[CueCandidate]:

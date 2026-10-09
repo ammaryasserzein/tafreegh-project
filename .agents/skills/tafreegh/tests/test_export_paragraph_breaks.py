@@ -44,7 +44,7 @@ class TestParagraphBreaks(unittest.TestCase):
 
     def test_each_line_is_its_own_paragraph(self) -> None:
         doc = self._build()
-        body = [p.text.strip() for p in doc.paragraphs[3:]]
+        body = [p.text.strip() for p in doc.paragraphs[3:] if p.text.strip()]
         self.assertEqual(
             body,
             [

@@ -47,6 +47,8 @@ The skill operates under three input configurations:
    - Affirmative particles such as `"نعم"`, `"صحيح"`, `"أيوة"`, and `"اه"` must **never** be deleted. Treat them as an integral, uninterrupted continuation of the Sheikh's verbal flow.
 5. **Standardization of Salawat**:
    - Whenever `"عليه الصلاة والسلام"` or equivalent verbal honors appear, always standardize to: `صلى الله عليه وسلم`.
+6. **Course-Specific Linguistic Context**:
+   - **فقه البيوع (سعد الخثلان)** (Lecturer: Sheikh Osama): The Sheikh lectures primarily in Classical Arabic (فصحى) with occasional Egyptian dialect idioms. Maintain strict Blind Literalism: transcribe spoken Classical Arabic verbatim as uttered, preserving natural pronunciation without synthesizing artificial I'rab endings.
 
 ---
 
@@ -64,9 +66,14 @@ Execute when `<matn_source>` is provided:
    - Retrieve matching text from `<matn_source>` verbatim with exact diacritics (tashkeel), orthography (rasm), and footnote markers without altering a single letter or vowel.
 3. **Strict Clamping (Zero Completion)**:
    - Never infer or complete unpronounced Matn phrases from the book. Extract exclusively what was pronounced.
-4. **Interleaving Structure**:
-   - Standalone Matn line: `**(نص المتن المشكول)**` separated by empty lines before and after. MUST NOT be on the same line as explanation.
-   - Inline citation inside Sheikh's explanation: `(اللفظة)` without breaking into new lines and WITHOUT bold `**`.
+4. **Interleaving Structure & Matn Re-reading Logic**:
+   - **First Appearance**: Standalone Matn line `**(نص المتن المشكول)**` separated by a single newline character (`\n`) before and after, strictly without leaving empty blank lines (this ensures it renders on a single-line gap `^p**(matn)**^p` in Word, not a double-line gap). MUST NOT be on the same line as explanation.
+   - **Re-reading & Explanation (The "Last Bolded Matn" Rule)**: When the Sheikh repeats parts of the Matn to explain them, check the words against the _last bolded Matn block_ (this means strictly the single most recent `**(matn)**` block; jumps to earlier blocks reset as First Appearance):
+     - **Inline Citation (`(الكلمة)`)**: If the repeated words appeared in the last bolded Matn and contain NO new Matn words, format as an inline citation `(الكلمة)` within the explanation, without bold.
+     - **Isolated New Matn (`**(الجديد)**`)**: If the words contain new Matn words not found in the last bolded Matn:
+       - **≤ 5 Old Words**: Combine old and new together into a new isolated bold block `**(القديم والجديد)**` on a new line.
+       - **> 5 Old Words**: Put the old words inline at the end of the current paragraph `(الكلمات القديمة)`, use a single newline character (`\n`) without leaving an empty blank line, and then put the new words isolated and bolded on the next line `**(الكلمات الجديدة)**`. (Exception: If the Sheikh speaks both continuously without any explanation in between, combine them into a single isolated block `**(القديم والجديد)**` regardless of word count).
+   - **Edge Case - Large Recounts**: If the last bolded Matn was a large block (> 2 sentences), the _first_ time the Sheikh extracts a few words from it to begin his explanation, force those words to be treated as a new isolated block `**(الكلمات)**`, even though they contain no new words. This breaks the chain and makes this small block the new "last bolded Matn" for subsequent logic.
 
 ### Branch B: Dynamic Fallback Interleaving (Hybrid Mode for Incomplete Matn Sources)
 
@@ -141,6 +148,7 @@ Execute exclusively when `<matn_source>` is completely absent:
        11. `طب دي إيه يعني؟ تدل على إيه؟` (prompting the class to deduce meaning)
        12. `إيه السؤال طيب؟ اللي عارف السؤال ياخد توفي.` (quizzing the students with a reward)
        13. `ها؟ تختاروا إيه؟` (asking the class to choose an option)
+       14. `حد بيسأل حاجة؟` (asking if anyone has a question)
      - **Disambiguation (Rhetorical vs. Genuine)**: If a cue word (especially `نعم؟`) appears **mid-paragraph** and the Sheikh continues speaking immediately without any topic shift, it is **rhetorical** — do NOT insert a student line. Only treat it as a genuine student prompt when it appears at a natural break point.
      - **Placement**: Sheikh's sentence with cue → new line → `طالب: صوت غير مسموع.` → new line → Sheikh continues.
    - **Zero Hallucination (Unknown Situations)**:
@@ -159,24 +167,14 @@ Execute exclusively when `<matn_source>` is completely absent:
 
 1. **Standard Document Header & Automated Metadata Extraction**:
    - When the raw transcript begins with an audio filename or metadata token (e.g., `YYYY-MM-DD [keyword].mp3`, such as `2026-09-10 سيرة.mp3`) or introductory tags like `دليل المصدر`:
-     - **Extract Date & Keyword**: Parse the date `YYYY-MM-DD` and subject keyword (e.g., `سيرة`, `زاد`, `دليل`, `رياض`, `توحيد`).
-     - **Resolve Canonical Title**: Map the keyword using the Routing Table in `CONTEXT.md`:
-       - `سيرة` -> `سيرة (الرحيق المختوم)`
-       - `دليل` / `معاملات` -> `دليل الطالب (كتاب البيع)`
-       - `توحيد` / `فتح الباري` -> `فتح الباري (كتاب التوحيد)`
-       - `زاد` -> `زاد المعاد`
-       - `أسماء` -> `الأسماء الحسنى`
-       - `رياض` -> `رياض الصالحين`
-       - `لب` / `أصول` -> `لب الأصول`
-       - `ديوان` -> `ديوان الشافعي`
-       - `صيد` -> `صيد الخاطر`
-       - `روضة` -> `شرح مختصر الروضة`
+     - **Extract Date, Number & Keyword**: Parse the date `YYYY-MM-DD` (or numbered stem pattern `[N]-[subject]_[N]` / explicit `المحاضرة: [رقم]`) and subject keyword (e.g., `سيرة`, `زاد`, `دليل`, `رياض`, `توحيد`, `بيوع`).
+     - **Resolve Canonical Title**: Map the extracted keyword to its full canonical title strictly using the Routing Table in `CONTEXT.md`.
      - **Header Structure**:
        Centered 3-line header at the top of the first page:
        ```text
        بسم الله الرحمن الرحيم
        المادة: [اسم المادة المعتمد بالكامل]
-       [Date in YYYY-MM-DD format]
+       [Date in YYYY-MM-DD format OR المحاضرة: [رقم المحاضرة] when calendar date is absent]
        ```
      - **Cleanse Transcript Body**: Strip the raw filename and introductory tags completely from the body. The transcription text must start cleanly with the Sheikh's verbal greeting (e.g., `الحمد لله، والصلاة والسلام على رسول الله...`).
 2. **Word Base Styling & Formatting Defaults**:
@@ -190,8 +188,8 @@ Execute exclusively when `<matn_source>` is completely absent:
    - **Hadith**: Enclose direct statements of the Prophet صلى الله عليه وسلم within quotation marks `" "`. **Only verbatim or near-verbatim quotations** receive quotes. If the Sheikh paraphrases a Hadith (e.g., "النبي صلى الله عليه وسلم أمرنا بكذا"), keep it as regular unquoted text. This boundary is refinable via the Diff Loop.
 4. **Zero-Spacing Rule (Bracket Hugging)**:
    - Parentheses and quotes must hug inner text with zero internal whitespace:
-     - Correct: `**(نص المتن)**` and `(آية)` and `"حديث"`
-     - Prohibited: `**( نص المتن )**`
+     - Correct: **(نص المتن)** and (آية) and "حديث"
+     - Prohibited: **( نص المتن )**
 5. **Paragraph Architecture**:
    - Target 4-6 lines for readability, but do not break up a single coherent thought even if it's a page long (rely on Diff Loop).
    - Explicit topic changes force a new line (often triggered by the word `طيب`).
@@ -200,7 +198,9 @@ Execute exclusively when `<matn_source>` is completely absent:
    - Separate every paragraph with a single blank line for clean pasting in Microsoft Word.
 6. **Arabic Orthography & Punctuation**:
    - Punctuate using Arabic marks only: `(، . : ؟ !)`.
-   - **Absolute Prohibition of Ellipsis (`...`)**: Never use consecutive dots or ellipsis (`...`, `..`) to denote pauses, hesitation, trailing speech, or unfinished thoughts. Spoken hesitations and audio pauses must be handled using the Arabic comma `،` or appropriate terminal punctuation (`.`, `؟`), maintaining uninterrupted textual continuity.
+   - **Absolute Prohibition of Mid-Paragraph Full Stops (`.`)**: Full stops `.` must **only** be used at the absolute end of a paragraph (immediately before a new line `^p` in Word). Mid-paragraph full stops are strictly forbidden and must be replaced with Arabic commas `،`.
+   - **Mid-Paragraph Exemptions**: Question marks `؟` and exclamation marks `!` are exempt and may be used mid-paragraph for rhetorical questions or exclamations within a continuous thought.
+   - **Absolute Prohibition of Ellipsis (`...`)**: Never use consecutive dots or ellipsis (`...`, `..`) to denote pauses, hesitation, trailing speech, or unfinished thoughts. Spoken hesitations and audio pauses must be handled using the Arabic comma `،` or appropriate terminal punctuation, maintaining uninterrupted textual continuity.
    - Place tanween on the letter preceding the alif: `شيئًا`، `قضاءً`، `شابًّا`.
    - Write `إذًا` with tanween (never with nun `إذن`).
    - Rigorously distinguish between Hamzat Wasl and Qat', Ya (`ي`) and Alif Maqsura (`ى`), and Ta Marbuta (`ة`) and Ha (`هـ`).
@@ -292,6 +292,7 @@ Consult the official [Egyptian Dialect Dictionary](references/dialect-rules.md).
 - [Golden Example 1: Prophetic Biography (Ar-Raheeq Al-Makhtoom)](examples/example-01-seerah.md)
 - [Golden Example 2: Comparative Jurisprudence (Dalil Al-Talib)](examples/example-02-fiqh.md)
 - [Golden Example 3: Hadith & Fiqh Biography (Zad Al-Ma'ad)](examples/example-03-zad.md)
+- [Golden Example 4: Fiqh (Buyu / Dalil Al-Talib)](examples/example-04-buyu.md)
 - [Golden Fallback Example 1: Prophetic Biography (Ar-Raheeq Al-Makhtoom)](examples/example-fallback-01.md)
 - [Golden Fallback Example 2: Prophetic Hadith (Riyad Al-Salihin)](examples/example-fallback-02.md)
 - [Golden Fallback Example 3: Names of Allah (Al-Asma Al-Husna)](examples/example-fallback-03.md)

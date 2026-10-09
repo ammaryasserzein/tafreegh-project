@@ -56,6 +56,11 @@ class TestGetOneDriveFolder(unittest.TestCase):
             ("صيد", "صيد الخاطر"),
             ("منطق", "المنطق"),
             ("المنطق", "المنطق"),
+            ("بيوع", "فقه البيوع (سعد الخثلان)"),
+            ("البيوع", "فقه البيوع (سعد الخثلان)"),
+            ("فقه البيوع", "فقه البيوع (سعد الخثلان)"),
+            ("فقه_البيوع", "فقه البيوع (سعد الخثلان)"),
+            ("خثلان", "فقه البيوع (سعد الخثلان)"),
         ]
         for keyword, expected_folder in test_cases:
             with self.subTest(keyword=keyword):
@@ -138,6 +143,26 @@ Source guide
         self.assertEqual(meta["subject_name"], "دليل الطالب (كتاب البيع)")
         self.assertEqual(meta["audio_file"], "2026-10-03 معاملات.mp3")
 
+    def test_numbered_stem_metadata(self):
+        sample = "17-فقه_البيوع_17.mp3\nSource guide\nالحمد لله..."
+        meta = parse_metadata(sample)
+        self.assertIsNone(meta["date"])
+        self.assertEqual(meta["lecture_number"], "17")
+        self.assertIn(meta["keyword"], ("فقه_البيوع", "فقه البيوع"))
+        self.assertEqual(meta["subject_name"], "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(meta["audio_file"], "17-فقه_البيوع_17.mp3")
+
+    def test_numbered_stem_with_explicit_headers(self):
+        sample = """بسم الله الرحمن الرحيم
+المادة: فقه البيوع (سعد الخثلان)
+المحاضرة: 17
+
+الحمد لله رب العالمين..."""
+        meta = parse_metadata(sample)
+        self.assertIsNone(meta["date"])
+        self.assertEqual(meta["lecture_number"], "17")
+        self.assertEqual(meta["subject_name"], "فقه البيوع (سعد الخثلان)")
+
 
 class TestHeaderFiltering(unittest.TestCase):
     def test_is_header_line_notebooklm_tags(self):
@@ -164,6 +189,27 @@ Source guide
         self.assertNotIn("Source guide", clean)
         self.assertNotIn(".mp3", clean)
         self.assertTrue(clean.startswith("بسم الله الرحمن الرحيم\nالمادة: سيرة (الرحيق المختوم)\n2026-10-01"))
+        self.assertIn("الحمد لله رب العالمين", clean)
+
+    def test_is_header_line_numbered_headers(self):
+        self.assertTrue(is_header_line("المحاضرة: 17"))
+        self.assertTrue(is_header_line("المحاضرة: 5"))
+        self.assertTrue(is_header_line("17-فقه_البيوع_17.mp3"))
+        self.assertTrue(is_header_line("17-فقه_البيوع_17"))
+
+    def test_standardize_transcript_header_numbered_lecture(self):
+        raw = """17-فقه_البيوع_17.mp3
+
+Source guide
+
+المادة: فقه البيوع (سعد الخثلان)
+المحاضرة: 17
+
+الحمد لله رب العالمين، والصلاة والسلام على رسول الله."""
+        clean = standardize_transcript_header(raw)
+        self.assertNotIn("Source guide", clean)
+        self.assertNotIn(".mp3", clean)
+        self.assertTrue(clean.startswith("بسم الله الرحمن الرحيم\nالمادة: فقه البيوع (سعد الخثلان)\nالمحاضرة: 17"))
         self.assertIn("الحمد لله رب العالمين", clean)
 
 
@@ -385,6 +431,120 @@ class TestIsMatchingStem(unittest.TestCase):
 
     def test_is_matching_stem_different_date_rejects(self):
         self.assertFalse(is_matching_stem("2026-09-20_سيرة.md", "2026-09-19", "سيرة"))
+
+    def test_is_matching_stem_numbered_stem(self):
+        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", None, "بيوع", stem="17-فقه_البيوع_17"))
+        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", None, "بيوع", lecture_number="17"))
+        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", "17", "بيوع"))
+        self.assertTrue(is_matching_stem("17-فقه_البيوع_17_AI.md", None, "فقه_البيوع", lecture_number="17"))
+        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", None, "بيوع", lecture_number="18"))
+        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", None, "رياض", lecture_number="17"))
+
+    def test_is_matching_stem_numbered_stem_requires_target_num(self):
+        # A numbered candidate must NOT match when no target_num or stem is provided
+        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", None, "بيوع"))
+        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", "", "فقه البيوع"))
+
+
+class TestExportNumberedDocuments(unittest.TestCase):
+    def test_export_numbered_lecture_documents_e2e(self):
+        with tempfile.TemporaryDirectory() as tmp_root, tempfile.TemporaryDirectory() as tmp_onedrive:
+            root_path = Path(tmp_root)
+            onedrive_base = Path(tmp_onedrive)
+            
+            raw_dir = root_path / "02_Raw_Inputs"
+            matn_dir = root_path / "01_Matn_Sources"
+            raw_dir.mkdir(parents=True)
+            matn_dir.mkdir(parents=True)
+            
+            raw_file = raw_dir / "17-فقه_البيوع_17.md"
+            matn_file = matn_dir / "17-فقه_البيوع_17.md"
+            
+            matn_text = "وَيَحْرُمُ رِبَا النَّسِيئَةِ، فِي بَيْعِ كُلِّ جِنْسَيْنِ اتَّفَقَا فِي عِلَّةِ رِبَا الْفَضْلِ."
+            matn_file.write_text(matn_text, encoding="utf-8")
+            
+            transcript = """17-فقه_البيوع_17.mp3
+Source guide
+المادة: فقه البيوع (سعد الخثلان)
+المحاضرة: 17
+
+الحمد لله والصلاة والسلام على رسول الله.
+**(ويحرم ربا النسيئة في بيع كل جنسين اتفقا في علة ربا الفضل)**
+طالب: صوت غير مسموع.
+نعم، هذا ضابط ربا النسيئة."""
+            raw_file.write_text(transcript, encoding="utf-8")
+            
+            results = export_documents(
+                transcript,
+                original_md_path=raw_file,
+                base_onedrive=onedrive_base,
+                project_root=root_path,
+            )
+            
+            # 1. Output files exist
+            onedrive_file = results["onedrive_file"]
+            project_file = results["project_file"]
+            self.assertTrue(onedrive_file.exists())
+            self.assertTrue(project_file.exists())
+            
+            # 2. Correct naming
+            self.assertEqual(onedrive_file.name, "17-فقه_البيوع_17.docx")
+            self.assertEqual(project_file.name, "17-فقه_البيوع_17_AI.md")
+            
+            # 3. Check docx content and headers
+            doc = docx.Document(str(onedrive_file))
+            headers = [p.text.strip() for p in doc.paragraphs[:3]]
+            self.assertEqual(headers[0], "بسم الله الرحمن الرحيم")
+            self.assertEqual(headers[1], "المادة: فقه البيوع (سعد الخثلان)")
+            self.assertEqual(headers[2], "المحاضرة: 17")
+            
+            # 4. Check archiving into processed/
+            self.assertFalse(raw_file.exists())
+            self.assertFalse(matn_file.exists())
+            self.assertTrue((raw_dir / "processed" / "17-فقه_البيوع_17.md").exists())
+            self.assertTrue((matn_dir / "processed" / "17-فقه_البيوع_17.md").exists())
+
+    def test_export_documents_metadata_from_path_sets_header_lines(self):
+        with tempfile.TemporaryDirectory() as tmp_root, tempfile.TemporaryDirectory() as tmp_onedrive:
+            root_path = Path(tmp_root)
+            onedrive_base = Path(tmp_onedrive)
+            
+            raw_dir = root_path / "02_Raw_Inputs"
+            raw_dir.mkdir(parents=True)
+            raw_file = raw_dir / "17-فقه_البيوع_17.md"
+            
+            # Markdown text body has NO header block
+            transcript = "الحمد لله، نبدأ في شرح ربا النسيئة."
+            raw_file.write_text(transcript, encoding="utf-8")
+            
+            results = export_documents(
+                transcript,
+                original_md_path=raw_file,
+                base_onedrive=onedrive_base,
+                project_root=root_path,
+            )
+            
+            onedrive_file = results["onedrive_file"]
+            doc = docx.Document(str(onedrive_file))
+            headers = [p.text.strip() for p in doc.paragraphs[:3]]
+            self.assertEqual(headers[0], "بسم الله الرحمن الرحيم")
+            self.assertEqual(headers[1], "المادة: فقه البيوع (سعد الخثلان)")
+            self.assertEqual(headers[2], "المحاضرة: 17")
+
+    def test_export_documents_dynamic_stem_fallback_uses_course_subject(self):
+        with tempfile.TemporaryDirectory() as tmp_root, tempfile.TemporaryDirectory() as tmp_onedrive:
+            root_path = Path(tmp_root)
+            onedrive_base = Path(tmp_onedrive)
+            
+            # Transcript for Diwan al-Shafi'i lecture 5 without mirrored stem in body
+            transcript = "المادة: ديوان الشافعي\nالمحاضرة: 5\nقال الإمام الشافعي رحمه الله."
+            results = export_documents(
+                transcript,
+                base_onedrive=onedrive_base,
+                project_root=root_path,
+            )
+            project_file = results["project_file"]
+            self.assertIn("5-ديوان_الشافعي_5_AI.md", project_file.name)
 
 
 class TestExportDocxHelpers(unittest.TestCase):

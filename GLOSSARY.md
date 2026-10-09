@@ -31,3 +31,11 @@ _Avoid_: Fallback diff, correction type
 **Sequential Cursor**:
 The position tracker in the matn source file during matching. Advances as segments are matched, with forward look-ahead and full-range look-behind to handle paragraph skips and sentence-by-sentence re-reads.
 _Avoid_: Read pointer, position marker
+
+**Markdown Leakage**:
+A failure mode where an LLM agent interprets inline formatting (like backticks or code fences) in prompt instructions as literal text requirements and outputs them into the generated document. Addressed by globally stripping non-semantic syntax in export scripts and removing them from positive prompt examples.
+_Avoid_: Prompt pollution, syntax leakage, literal backticks
+
+**Numbered Lecture Stem**:
+A lecture file naming convention that uses mirrored sequential lecture numbers instead of a Gregorian date (`YYYY-MM-DD`), structured as `[N]-[subject]_[N]` (e.g., `17-فقه_البيوع_17`). Matched across `01_Matn_Sources/` and `02_Raw_Inputs/` by mirrored integer identifiers and canonical keyword tokens.
+_Avoid_: Date stem, unnumbered lecture, arbitrary filename

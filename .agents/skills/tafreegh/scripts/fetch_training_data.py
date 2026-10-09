@@ -15,13 +15,14 @@ AI_OUTPUTS_DIR = PROJECT_ROOT / "03_AI_Outputs"
 RAW_INPUTS_DIR = PROJECT_ROOT / "02_Raw_Inputs"
 
 
-def _find_ai_baseline(date_str: str, subject: str) -> Path | None:
+def _find_ai_baseline(date_str: str, subject: str, filename_stem: str) -> Path | None:
     """Search for the corresponding _AI.md baseline file in known directories."""
     candidate_name = f"{date_str}_{subject}_AI.md"
+    candidate_name_stem = f"{filename_stem}_AI.md"
     for directory in (AI_OUTPUTS_DIR, RAW_INPUTS_DIR):
-        candidate = directory / candidate_name
-        if candidate.exists():
-            return candidate
+        for candidate in (directory / candidate_name_stem, directory / candidate_name):
+            if candidate.exists():
+                return candidate
     # Fallback: search by date prefix in both dirs
     for directory in (AI_OUTPUTS_DIR, RAW_INPUTS_DIR):
         if directory.exists():
@@ -63,12 +64,13 @@ def main():
         
         if date_match:
             date_str = date_match.group(0)
+            md_filename = f"{date_str}_{subject}.md"
         else:
             # Fallback to file modification date
             mtime = os.path.getmtime(docx_path)
             date_str = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
-            
-        md_filename = f"{date_str}_{subject}.md"
+            md_filename = f"{date_str}_{subject}_{filename_stem}.md"
+        
         md_filepath = TRAINING_DATA_DIR / md_filename
         
         # Skip if already processed
@@ -89,7 +91,7 @@ def main():
         print(f"Saved extracted text to {md_filepath} (Original docx kept safe in OneDrive)")
 
         # --- Diff Loop: detect new student cue candidates ---
-        ai_baseline = _find_ai_baseline(date_str, subject)
+        ai_baseline = _find_ai_baseline(date_str, subject, filename_stem)
         if ai_baseline:
             ai_text = ai_baseline.read_text(encoding='utf-8')
             result = detect_new_student_cues(ai_text, text)
