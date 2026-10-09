@@ -20,3 +20,8 @@ old_context.md
 # Skill junctions & aliases
 .agents/skills/تفريغ/
 tafreegh-skill/
+
+# Runtime pipeline outputs & training data dumps
+03_AI_Outputs/
+04_Training_Data/
+

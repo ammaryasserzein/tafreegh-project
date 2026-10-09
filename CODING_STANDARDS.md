@@ -20,4 +20,9 @@
 
 ## 5. Automated Verification
 
-- **Pre-Review Script Execution**: Run `scripts/verify_repo.py` using the environment's Python runtime (`python scripts/verify_repo.py` or `py scripts/verify_repo.py`). The verification script must exit with code 0 before review sign-off.
+- **Pre-Review Script Execution**: Run `scripts/verify_repo.py` using the Python launcher (`py scripts/verify_repo.py`). The verification script must exit with code 0 before review sign-off.
+
+## 6. Domain Purity & Boundary Seams
+
+- **Model Immutability & Non-Destructive Operations**: Domain models and dataclasses maintain pure state operations. Methods such as `merge()` preserve unspecified fields from the target instance without destructive nullification.
+- **Seam Separation**: Presentation, formatting precedence, and document layout heuristics reside strictly in export and resolution seams (such as `resolve_document_identity()`), keeping core domain entities decoupled from delivery mechanics.
