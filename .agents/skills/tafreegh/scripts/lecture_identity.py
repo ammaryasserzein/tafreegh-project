@@ -42,14 +42,18 @@ def _resolve_context_file(context_path: Path | None = None) -> Path | None:
     if context_path and Path(context_path).exists():
         return Path(context_path)
     
-    candidates = [
-        Path(__file__).resolve().parents[4] / "CONTEXT.md",
-        Path(r"C:\Users\L\Documents\Tafreegh_Project\CONTEXT.md"),
-        Path("CONTEXT.md").resolve(),
-    ]
-    for c in candidates:
-        if c.exists() and c.is_file():
-            return c
+    # 1. Traverse up from current script location
+    for p in Path(__file__).resolve().parents:
+        cand = p / "CONTEXT.md"
+        if cand.exists() and cand.is_file():
+            return cand
+
+    # 2. Traverse up from current working directory
+    for p in [Path.cwd(), *Path.cwd().parents]:
+        cand = p / "CONTEXT.md"
+        if cand.exists() and cand.is_file():
+            return cand
+
     return None
 
 
@@ -66,10 +70,22 @@ def load_canonical_routing(context_path: Path | None = None) -> dict[str, str]:
 
     content = file_path.read_text(encoding="utf-8")
     lines = content.splitlines()
+    has_section_3 = any(line.strip().startswith("## 3.") or "توجيه المتون" in line for line in lines)
+    in_section_3 = False
     in_table = False
 
     for line in lines:
         stripped = line.strip()
+        if has_section_3:
+            if stripped.startswith("## 3.") or "توجيه المتون" in stripped:
+                in_section_3 = True
+                continue
+            if in_section_3 and stripped.startswith("## "):
+                # Left Section 3
+                break
+            if not in_section_3:
+                continue
+
         if not (stripped.startswith("|") and stripped.endswith("|")):
             if in_table:
                 # End of table block
@@ -84,11 +100,8 @@ def load_canonical_routing(context_path: Path | None = None) -> dict[str, str]:
         in_table = True
         keyword_cell = cells[0]
         
-        # Column 1 or 2 contains canonical subject name
-        if len(cells) >= 3:
-            subject_cell = cells[1]
-        else:
-            subject_cell = cells[1]
+        # Column 1 contains canonical subject name (in both 2-column and 3-column formats)
+        subject_cell = cells[1] if len(cells) > 1 else ""
 
         # Extract bold text if present: **subject**
         bold_match = re.search(r"\*\*([^*]+)\*\*", subject_cell)
@@ -172,22 +185,24 @@ class LectureIdentity:
 
     # --- Mapping / Dict compatibility for legacy callers ---
     def __getitem__(self, key: str) -> Any:
-        if hasattr(self, key):
+        if key in self.__dataclass_fields__:
             return getattr(self, key)
         raise KeyError(key)
 
     def __setitem__(self, key: str, value: Any) -> None:
-        if hasattr(self, key):
+        if key in self.__dataclass_fields__:
             setattr(self, key, value)
         else:
             raise KeyError(key)
 
     def __contains__(self, key: object) -> bool:
-        return isinstance(key, str) and hasattr(self, key)
+        return isinstance(key, str) and key in self.__dataclass_fields__
 
     def get(self, key: str, default: Any = None) -> Any:
-        val = getattr(self, key, None)
-        return val if val is not None else default
+        if key in self.__dataclass_fields__:
+            val = getattr(self, key)
+            return val if val is not None else default
+        return default
 
     def items(self):
         return {

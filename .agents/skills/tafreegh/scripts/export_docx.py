@@ -384,22 +384,6 @@ def format_thousands(text: str) -> str:
     return re.sub(r'\b(\d+)000\b', replacer, text)
 
 
-def normalize_stem(candidate_name: str) -> str:
-    """
-    Strips double extensions (.md.md), trailing extensions (.docx, .md),
-    and suffixes (_AI, _processed, _full, _مقاطع, #AI) per ADR 0002 § 9.
-    """
-    s = candidate_name
-    prev = None
-    while s != prev:
-        prev = s
-        # Strip trailing known suffixes
-        s = re.sub(r'(?:[ _]+(?:AI|processed|full|مقاطع)|#[a-zA-Z0-9]+)+$', '', s, flags=re.IGNORECASE)
-        # Strip trailing extensions (supports single/double extensions)
-        s = re.sub(r'(\.[a-zA-Z0-9_]+)+$', '', s)
-    return s.strip()
-
-
 def is_matching_stem(
     candidate_name: str,
     date: str | None = None,
@@ -413,9 +397,7 @@ def is_matching_stem(
     supporting both (date, keyword) tuples and numbered lecture stems
     (e.g. 17-فقه_البيوع_17) per ADR 0002 § 9 and ADR 0004.
     """
-    if identity:
-        return identity.matches(candidate_name, routing_map=CANONICAL_SUBJECT_NAMES)
-    ident = LectureIdentity(date=date, keyword=keyword, stem=stem, lecture_number=lecture_number)
+    ident = identity or LectureIdentity(date=date, keyword=keyword, stem=stem, lecture_number=lecture_number)
     return ident.matches(candidate_name, routing_map=CANONICAL_SUBJECT_NAMES)
 
 
@@ -448,14 +430,14 @@ def archive_processed_inputs(
     
     if matn_dir.exists():
         for item in matn_dir.iterdir():
-            if item.is_file() and is_matching_stem(item.name, identity=ident):
+            if item.is_file() and ident.matches(item.name, routing_map=CANONICAL_SUBJECT_NAMES):
                 dest = matn_processed / item.name
                 shutil.move(str(item), str(dest))
                 archived_matn.append(dest)
                 
     if raw_dir.exists():
         for item in raw_dir.iterdir():
-            if is_matching_stem(item.name, identity=ident):
+            if ident.matches(item.name, routing_map=CANONICAL_SUBJECT_NAMES):
                 if item.is_dir() and "_مقاطع" in item.name:
                     shutil.rmtree(str(item))
                     deleted_chunks.append(item)
@@ -512,14 +494,14 @@ def find_matching_matn_source(
 
     # Check unarchived sources first
     for item in matn_dir.iterdir():
-        if item.is_file() and is_matching_stem(item.name, identity=ident):
+        if item.is_file() and ident.matches(item.name, routing_map=CANONICAL_SUBJECT_NAMES):
             return item
 
     # Check processed/ subdirectory if reprocessing
     processed_dir = matn_dir / "processed"
     if processed_dir.exists():
         for item in processed_dir.iterdir():
-            if item.is_file() and is_matching_stem(item.name, identity=ident):
+            if item.is_file() and ident.matches(item.name, routing_map=CANONICAL_SUBJECT_NAMES):
                 return item
 
     return None
@@ -720,8 +702,7 @@ def export_documents(
     ident = parse_metadata(markdown_text)
     
     if original_md_path:
-        path_ident = parse_metadata(Path(original_md_path).name)
-        path_ident.stem = normalize_stem(Path(original_md_path).name)
+        path_ident = LectureIdentity.from_filename(Path(original_md_path).name)
         ident = ident.merge(path_ident)
 
     if identity:
@@ -732,34 +713,11 @@ def export_documents(
     if keyword:
         ident.keyword = keyword
 
-    used_date = ident.date
-    lecture_number = ident.lecture_number
-    used_keyword = ident.keyword or "عام"
-    clean_subject = ident.subject_name or (CANONICAL_SUBJECT_NAMES.get(used_keyword) if used_keyword in CANONICAL_SUBJECT_NAMES else used_keyword)
-    ident.subject_name = clean_subject
-
     clean_md = standardize_transcript_header(
         markdown_text,
         identity=ident,
     )
     clean_md = format_thousands(clean_md)
-    
-    # Derive input_stem
-    if not ident.stem:
-        if original_md_path:
-            ident.stem = normalize_stem(Path(original_md_path).name)
-        elif lecture_number:
-            stem_match = re.search(r'\b(\d+[-_][^\s\n\r]+?[-_]\d+)\b', markdown_text)
-            if stem_match:
-                ident.stem = normalize_stem(stem_match.group(1))
-            else:
-                subj_token = re.sub(r'[\\/*?:"<>|()]', '', clean_subject).strip().replace(" ", "_")
-                ident.stem = f"{lecture_number}-{subj_token}_{lecture_number}"
-        elif used_date:
-            ident.stem = used_date
-        else:
-            ident.stem = "تاريخ_غير_محدد"
-    input_stem = ident.resolved_stem
     
     # 1. Matn Matching & Interleaving
     target_matn_file = matn_source_path or find_matching_matn_source(
@@ -772,13 +730,14 @@ def export_documents(
         clean_md = interleave_matn_segments(clean_md, matcher)
 
     # 2. Target OneDrive path (docx)
+    used_keyword = ident.keyword or "عام"
     onedrive_dir = get_onedrive_folder(used_keyword, base_onedrive)
-    if used_date:
-        docx_filename = f"{used_date}.docx"
-    elif input_stem:
-        docx_filename = f"{input_stem}.docx"
+    if ident.date:
+        docx_filename = f"{ident.date}.docx"
+    elif ident.resolved_stem:
+        docx_filename = f"{ident.resolved_stem}.docx"
     else:
-        docx_filename = f"{lecture_number or 'تاريخ_غير_محدد'}.docx"
+        docx_filename = f"{ident.lecture_number or 'تاريخ_غير_محدد'}.docx"
 
     onedrive_file = onedrive_dir / docx_filename
     
@@ -803,12 +762,12 @@ def export_documents(
     subject_part = ident.subject_name or used_keyword
     subject_clean = re.sub(r'[\\/*?:"<>|()]', "", subject_part).strip().replace(" ", "_")
     
-    if used_date:
-        project_file = project_dir / f"{used_date}_{subject_clean}_AI.md"
-    elif input_stem:
-        project_file = project_dir / f"{input_stem}_AI.md"
+    if ident.date:
+        project_file = project_dir / f"{ident.date}_{subject_clean}_AI.md"
+    elif ident.resolved_stem:
+        project_file = project_dir / f"{ident.resolved_stem}_AI.md"
     else:
-        project_file = project_dir / f"{lecture_number}_{subject_clean}_AI.md"
+        project_file = project_dir / f"{ident.lecture_number}_{subject_clean}_AI.md"
 
     ai_md_content = clean_md
     if matcher and matcher.history:

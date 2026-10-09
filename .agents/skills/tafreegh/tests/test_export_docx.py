@@ -628,6 +628,12 @@ class TestLectureIdentity(unittest.TestCase):
         self.assertEqual(ident.get("keyword"), "بيوع")
         self.assertEqual(ident.get("missing", "default_val"), "default_val")
         self.assertIn("lecture_number", ident)
+        # Methods must not be exposed as dictionary keys
+        self.assertNotIn("matches", ident)
+        self.assertNotIn("get", ident)
+        self.assertEqual(ident.get("matches", "fallback"), "fallback")
+        with self.assertRaises(KeyError):
+            _ = ident["matches"]
 
         # Mutability via mapping protocol
         ident["keyword"] = "فقه_البيوع"

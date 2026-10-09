@@ -37,8 +37,9 @@ def _find_ai_baseline(
         candidate_names.append(f"{ident.stem}_AI.md")
     if ident.resolved_stem:
         candidate_names.append(f"{ident.resolved_stem}_AI.md")
-    if ident.date and subject:
-        candidate_names.append(f"{ident.date}_{subject}_AI.md")
+    subj = ident.subject_name or subject
+    if ident.date and subj:
+        candidate_names.append(f"{ident.date}_{subj}_AI.md")
     elif ident.date:
         candidate_names.append(f"{ident.date}_AI.md")
 
