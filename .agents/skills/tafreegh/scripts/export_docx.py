@@ -243,6 +243,13 @@ def set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bo
             rPr.remove(bCs)
 
 
+def _strip_hybrid_summary(markdown_text: str) -> str:
+    """Strips the Dynamic Fallback Interleaving summary block from markdown text if present."""
+    if "### تقرير المتن الهجين" in markdown_text:
+        return markdown_text.split("### تقرير المتن الهجين")[0].strip()
+    return markdown_text
+
+
 def create_docx(
     markdown_text: str,
     output_path: Path,
@@ -259,6 +266,7 @@ def create_docx(
     # Targeted sanitization: strip backticks only if they wrap Arabic text to prevent markdown leakage,
     # while preserving valid backticks around English terms/code per global rules.
     markdown_text = re.sub(r'`([^`]*[\u0600-\u06FF]+[^`]*)`', r'\1', markdown_text)
+    markdown_text = _strip_hybrid_summary(markdown_text)
 
     if template_path and Path(template_path).exists():
         doc = docx.Document(str(template_path))
@@ -315,6 +323,16 @@ def create_docx(
             lines.pop(0)
             
         if not lines:
+            continue
+
+        # Check if the entire paragraph is a standalone Matn block (even if multiline)
+        para_matn_match = re.match(r'^\*\*(.+)\*\*$', cleaned_para, re.DOTALL)
+        if para_matn_match and not re.search(r'\*\*[^*]+\*\*', para_matn_match.group(1)):
+            p = doc.add_paragraph()
+            set_p_rtl(p, align=None)
+            matn_content = " ".join(l.strip() for l in para_matn_match.group(1).split('\n') if l.strip())
+            run = p.add_run(matn_content)
+            set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=True)
             continue
             
         # One Word paragraph (^p) per line, never manual line break (^l)
@@ -443,7 +461,10 @@ def archive_processed_inputs(
 DIALECT_MARKERS = {
     "كدا", "كده", "ده", "دا", "دي", "ايه", "إيه", "ازاي", "ازاى", "احنا", "إحنا",
     "برضه", "برضو", "علطول", "أومال", "امال", "مش", "عشان", "علشان", "بقى",
-    "مفيش", "مافيش", "مكانش", "ماكانش", "حد", "تاني", "قوي", "خالص", "يلا"
+    "مفيش", "مافيش", "مكانش", "ماكانش", "حد", "تاني", "قوي", "خالص", "يلا",
+    "طب", "طيب", "يعني", "حاجة", "بتاع", "اللي", "دلوقتي", "عاوز", "عايز", "عايزة",
+    "بيقول", "يقولوا", "شوية", "تلاقي", "طبعا", "أهو", "اهو", "يبقى", "ماشي", "بقول",
+    "ولواحد",
 }
 
 
@@ -674,6 +695,7 @@ def export_documents(
     project_root: Path = DEFAULT_PROJECT_ROOT,
     matn_source_path: Path = None,
     identity: LectureIdentity | None = None,
+    overwrite: bool = False,
 ) -> dict:
     """
     Exports a .docx to OneDrive and saves the AI baseline .md into 03_AI_Outputs.
@@ -682,6 +704,7 @@ def export_documents(
     On confirmed export, atomically archives input files into processed/.
     """
     project_root = Path(project_root)
+    markdown_text = _strip_hybrid_summary(markdown_text)
     ident = parse_metadata(markdown_text)
     
     if original_md_path:
@@ -722,7 +745,7 @@ def export_documents(
 
     onedrive_file = onedrive_dir / docx_filename
     
-    if onedrive_file.exists():
+    if onedrive_file.exists() and not overwrite:
         base_stem = f"{onedrive_file.stem} #AI"
         onedrive_file = onedrive_file.with_name(f"{base_stem}{onedrive_file.suffix}")
         counter = 1
@@ -776,21 +799,31 @@ export_dual_copies = export_documents
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: py export_docx.py <path_to_markdown_transcript> [keyword] [date] [matn_source_path]")
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Export Tafreegh markdown transcript to OneDrive .docx and 03_AI_Outputs baseline."
+    )
+    parser.add_argument("md_path", type=Path, help="Path to markdown transcript.")
+    parser.add_argument("keyword", nargs="?", default=None, help="Optional subject keyword.")
+    parser.add_argument("date", nargs="?", default=None, help="Optional lecture date or number.")
+    parser.add_argument("matn_source_path", nargs="?", default=None, help="Optional path to matn source.")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing OneDrive .docx in place.")
+
+    args = parser.parse_args()
+    if not args.md_path.exists():
+        print(f"Error: File not found: {args.md_path}")
         sys.exit(1)
-        
-    md_path = Path(sys.argv[1])
-    if not md_path.exists():
-        print(f"Error: File not found: {md_path}")
-        sys.exit(1)
-        
-    content = md_path.read_text(encoding='utf-8')
-    cli_keyword = sys.argv[2] if len(sys.argv) > 2 else None
-    cli_date = sys.argv[3] if len(sys.argv) > 3 else None
-    cli_matn = sys.argv[4] if len(sys.argv) > 4 else None
-    
-    results = export_documents(content, md_path, keyword=cli_keyword, date=cli_date, matn_source_path=cli_matn)
+
+    content = args.md_path.read_text(encoding="utf-8")
+    results = export_documents(
+        content,
+        args.md_path,
+        keyword=args.keyword,
+        date=args.date,
+        matn_source_path=args.matn_source_path,
+        overwrite=args.overwrite,
+    )
     print(f"✓ OneDrive docx exported: {results['onedrive_file']}")
     print(f"✓ Project baseline MD saved: {results['project_file']}")
     if results.get("archived"):

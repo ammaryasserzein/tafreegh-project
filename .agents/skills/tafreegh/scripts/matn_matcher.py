@@ -40,6 +40,15 @@ def strip_tashkeel(text: str) -> str:
     return TASHKEEL_REGEX.sub('', text)
 
 
+def strip_tashkeel_preserving_citations(text: str) -> str:
+    """Removes Arabic diacritics from fallback text while preserving vowelized parenthesized citations (...) inside it."""
+    parts = re.split(r'(\([^)]+\))', text)
+    return "".join(
+        part if (part.startswith('(') and part.endswith(')')) else strip_tashkeel(part)
+        for part in parts
+    )
+
+
 def normalize_arabic_search(text: str) -> str:
     """Normalizes Arabic text for tolerant substring matching."""
     t = strip_tashkeel(text)
@@ -107,7 +116,7 @@ class SequentialMatnMatcher:
     def _create_fallback_result(self, spoken_segment: str) -> MatnMatchResult:
         res = MatnMatchResult(
             mode=MatchMode.FALLBACK,
-            text=strip_tashkeel(spoken_segment).strip(),
+            text=strip_tashkeel_preserving_citations(spoken_segment).strip(),
             start_pos=-1,
             end_pos=-1,
             is_fallback=True
@@ -126,30 +135,34 @@ class SequentialMatnMatcher:
         if not search_query or len(search_query) < 3:
             return self._create_fallback_result(spoken_segment)
 
-        # 1. Forward search
+        # 1. Forward search (allowing overlap for re-read prefixes extending into new text)
+        overlap = 300
+        search_start = max(0, self.cursor_norm - overlap)
         window_end = min(len(self.norm_source), self.cursor_norm + self.forward_lookahead)
-        forward_slice = self.norm_source[self.cursor_norm:window_end]
+        forward_slice = self.norm_source[search_start:window_end]
         
         idx_forward = forward_slice.find(search_query)
         if idx_forward != -1:
-            norm_start = self.cursor_norm + idx_forward
+            norm_start = search_start + idx_forward
             norm_end = norm_start + len(search_query)
-            orig_start, orig_end, canon_text = self._extract_original_slice(norm_start, norm_end)
-            
-            # Advance cursor
-            self.cursor_norm = norm_end
-            self.cursor = orig_end
+            if norm_end > self.cursor_norm:
+                orig_start, orig_end, canon_text = self._extract_original_slice(norm_start, norm_end)
+                
+                # Advance cursor
+                self.cursor_norm = norm_end
+                self.cursor = orig_end
 
-            res = MatnMatchResult(
-                mode=MatchMode.PRIMARY,
-                text=canon_text,
-                start_pos=orig_start,
-                end_pos=orig_end,
-                is_fallback=False,
-                is_re_read=False
-            )
-            self.history.append(res)
-            return res
+                res = MatnMatchResult(
+                    mode=MatchMode.PRIMARY,
+                    text=canon_text,
+                    start_pos=orig_start,
+                    end_pos=orig_end,
+                    is_fallback=False,
+                    is_re_read=False
+                )
+                self.history.append(res)
+                return res
+
 
         # 2. Look-behind search (0 -> cursor_norm)
         lookbehind_slice = self.norm_source[:self.cursor_norm]

@@ -36,11 +36,11 @@ class TestDetectNewStudentCues:
         assert detect_new_student_cues(shared, shared) == []
 
     def test_detects_multiple_new_cues(self):
-        ai_text = "أول نقطة، نعم؟ ثاني نقطة، بتقول إيه؟ ثالث نقطة."
+        ai_text = "أول نقطة، نعم؟ ثاني نقطة، بتقول حاجة؟ ثالث نقطة."
         corrected_text = (
             "أول نقطة، نعم؟\n\n"
             "طالب: صوت غير مسموع.\n\n"
-            "ثاني نقطة، بتقول إيه؟\n\n"
+            "ثاني نقطة، بتقول حاجة؟\n\n"
             "طالب: صوت غير مسموع.\n\n"
             "ثالث نقطة."
         )
@@ -87,5 +87,25 @@ class TestDetectNewStudentCues:
         corrected_text = (
             "الشيخ يتكلم.\n\n"
             "طالب: كلمة (صوت غير مسموع).\n\n"
+        )
+        assert detect_new_student_cues(ai_text, corrected_text) == []
+
+    def test_suppresses_rhetorical_ha_suffix(self):
+        """Cue sentences ending in 'ها؟' are rhetorical — suppressed by suffix filter."""
+        ai_text = "الشيخ يتكلم عن المسألة."
+        corrected_text = (
+            "الشيخ يتكلم عن المسألة، ها؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "نكمل الدرس."
+        )
+        assert detect_new_student_cues(ai_text, corrected_text) == []
+
+    def test_suppresses_rhetorical_eih_suffix(self):
+        """Cue sentences ending in 'إيه؟' are rhetorical — suppressed by suffix filter."""
+        ai_text = "الشيخ يتكلم عن المسألة."
+        corrected_text = (
+            "طب دي إيه يعني؟ تدل على إيه؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "نكمل الدرس."
         )
         assert detect_new_student_cues(ai_text, corrected_text) == []

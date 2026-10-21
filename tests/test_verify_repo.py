@@ -54,6 +54,37 @@ def test_negative_phrasing_detection(tmp_path):
     assert len(phrasing_findings) == 1
     assert "لا تفعل" in phrasing_findings[0].message
 
+
+def test_negative_phrasing_in_skill_and_references(tmp_path):
+    ref_dir = tmp_path / ".agents" / "skills" / "tafreegh" / "references"
+    ref_dir.mkdir(parents=True)
+    bad_ref = ref_dir / "formatting-rules.md"
+    bad_ref.write_text("- Prohibited: spacing inside parens\n- Never output brackets.", encoding="utf-8")
+
+    findings = []
+    verify_repo.check_steering_docs_phrasing(findings, base_dir=tmp_path)
+    phrasing_findings = [item for item in findings if item.category == verify_repo.FindingCategory.PHRASING]
+    assert len(phrasing_findings) == 2
+    assert all(f.file_path == ".agents/skills/tafreegh/references/formatting-rules.md" for f in phrasing_findings)
+
+
+def test_check_no_arabic_in_backticks(tmp_path):
+    ref_dir = tmp_path / ".agents" / "skills" / "tafreegh" / "references"
+    ref_dir.mkdir(parents=True)
+    doc = ref_dir / "dialect-rules.md"
+    doc.write_text(
+        "Valid English backtick: `export_docx.py` and `YYYY-MM-DD`.\n"
+        "Invalid Arabic backtick: `مفيهوش` and `**(نص المتن)**`.\n",
+        encoding="utf-8",
+    )
+
+    findings = []
+    verify_repo.check_no_arabic_in_backticks(findings, base_dir=tmp_path)
+    assert len(findings) == 2
+    assert all(f.line_number == 2 for f in findings)
+    assert any("مفيهوش" in f.message for f in findings)
+
+
 def test_check_directories_allows_processed_subdirectories(tmp_path):
     for d in verify_repo.STANDARD_DIRS:
         (tmp_path / d).mkdir()

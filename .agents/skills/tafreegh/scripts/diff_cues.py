@@ -30,6 +30,17 @@ _PARTIAL_INAUDIBLE_RE = re.compile(
     r"^طالب:.*\(صوت غير مسموع\)"
 )
 
+# Rhetorical suffixes that should never be nominated as student cues.
+# Sentences ending in these are teaching devices, not student prompts.
+_RHETORICAL_SUFFIX_RE = re.compile(
+    r"(?:ها|إيه)؟\s*$"
+)
+
+
+def _is_rhetorical_cue(sentence: str) -> bool:
+    """Return True if the sentence ends with a known rhetorical suffix."""
+    return bool(_RHETORICAL_SUFFIX_RE.search(sentence.strip()))
+
 
 def _is_full_inaudible_student_line(line: str) -> bool:
     """Return True only for complete inaudible lines, not partial ones."""
@@ -86,7 +97,7 @@ def _collect_cues(
         line = normalized_lines[idx]
         if _is_full_inaudible_student_line(line):
             cue = _find_preceding_sentence(normalized_lines, idx)
-            if cue:
+            if cue and not _is_rhetorical_cue(cue):
                 raw_lines = raw_text.splitlines()
                 line_number = 0
                 normalized_count = 0

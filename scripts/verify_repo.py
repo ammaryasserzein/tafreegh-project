@@ -14,6 +14,9 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 STANDARD_DIRS = [
@@ -53,6 +56,15 @@ ALLOWED_ROOT_FILES = {
 STEERING_DOCS = [
     "CONTEXT.md",
     "CODING_STANDARDS.md",
+    ".agents/skills/tafreegh/SKILL.md",
+    ".agents/skills/tafreegh/references/formatting-rules.md",
+    ".agents/skills/tafreegh/references/dialect-rules.md",
+]
+
+SKILL_DOCS = [
+    ".agents/skills/tafreegh/SKILL.md",
+    ".agents/skills/tafreegh/references/formatting-rules.md",
+    ".agents/skills/tafreegh/references/dialect-rules.md",
 ]
 
 NEGATIVE_PHRASING_PATTERNS = [
@@ -60,7 +72,12 @@ NEGATIVE_PHRASING_PATTERNS = [
     re.compile(r"\bتجنب\b"),
     re.compile(r"\bignore\b", re.IGNORECASE),
     re.compile(r"\bdon't\b", re.IGNORECASE),
+    re.compile(r"\bnever\b", re.IGNORECASE),
+    re.compile(r"\bprohibited\b", re.IGNORECASE),
 ]
+
+INLINE_BACKTICK_PATTERN = re.compile(r"`([^`\n]+)`")
+ARABIC_CHAR_PATTERN = re.compile(r"[\u0600-\u06FF]")
 
 REQUIRED_STANDARDS_SECTIONS = [
     "Scope & Blast Radius",
@@ -71,6 +88,7 @@ class FindingCategory(str, Enum):
     DIR = "DIR"
     SCRATCH = "SCRATCH"
     PHRASING = "PHRASING"
+    BACKTICK = "BACKTICK"
     CONTEXT = "CONTEXT"
     TABLE = "TABLE"
     STANDARDS = "STANDARDS"
@@ -146,6 +164,23 @@ def check_steering_docs_phrasing(findings: list[Finding], base_dir: Path = REPO_
                         line_number=line_number
                     ))
 
+
+def check_no_arabic_in_backticks(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
+    for doc_name in SKILL_DOCS:
+        target_doc = base_dir / doc_name
+        if not target_doc.is_file():
+            continue
+        lines = target_doc.read_text(encoding="utf-8").splitlines()
+        for line_number, line_content in enumerate(lines, 1):
+            for span in INLINE_BACKTICK_PATTERN.findall(line_content):
+                if ARABIC_CHAR_PATTERN.search(span):
+                    findings.append(Finding(
+                        category=FindingCategory.BACKTICK,
+                        message=f"Arabic text inside inline backticks (ADR 0003 violation): `{span}`",
+                        file_path=doc_name,
+                        line_number=line_number
+                    ))
+
 def check_context_integrity(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     context_file = base_dir / "CONTEXT.md"
     if not context_file.is_file():
@@ -207,6 +242,7 @@ def run_all_checks(base_dir: Path = REPO_ROOT) -> list[Finding]:
     check_directories(findings, base_dir=base_dir)
     check_no_root_scratch(findings, base_dir=base_dir)
     check_steering_docs_phrasing(findings, base_dir=base_dir)
+    check_no_arabic_in_backticks(findings, base_dir=base_dir)
     check_context_integrity(findings, base_dir=base_dir)
     check_coding_standards(findings, base_dir=base_dir)
     return findings

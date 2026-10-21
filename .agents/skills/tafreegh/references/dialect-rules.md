@@ -20,17 +20,18 @@ When Egyptian dialect expressions occur in the speaker's explanation, normalize 
 | ميه / ماء             | **ماية**                    | Medial alif and ya                 |
 | اثنين / اتنين         | **اتنين**                   | In casual spoken contexts          |
 | تلاتة / ثلاثة         | **ثلاثة**                   | Preserve classical tha in numbers  |
+| تاني / ثاني           | **ثاني**                    | Preserve classical tha in ordinals |
 | تانية / ثانية         | **ثانية**                   | Preserve classical tha in ordinals |
 | يا [اسم شخص]          | **يا فلان**                 | Anonymize attendee personal names  |
 | أما (بمعنى عندما)     | **لما**                     | Standardize temporal 'when' to لما |
 
 ## Colloquial Negation Rules
 
-- **Fused Negation Particles**: Single connected word: `مفيهوش`, `مالهاش`, `ملوش`, `مفيش`, `مكانوش`, `ميقفوش`.
-- **Compound Verb Negation**: Write `ما + [verb] + ش` as separate particles: `ما جتش`, `ما حصلش`, `ما حدش`.
+- **Fused Negation Particles**: Single connected word: **مفيهوش**، **مالهاش**، **ملوش**، **مفيش**، **مكانوش**، **ميقفوش**.
+- **Compound Verb Negation**: Write ما + فعل + ش as separate particles: **ما جتش**، **ما حصلش**، **ما حدش**.
 
 ## Laughter, Fillers & Affirmations
 
-- **Laughter**: Always record as `ههههه`.
-- **Stutters & Vocal Fillers**: Auditory hesitations `(آآ، ا، أ)` are stripped automatically.
-- **Affirmative Fillers**: Words like `نعم`, `صحيح`, `أيوة`, `اه` must be strictly retained as part of the speech flow.
+- **Laughter**: Always record as ههههه.
+- **Stutters & Vocal Fillers**: Auditory hesitations (آآ، ا، أ) are stripped automatically.
+- **Affirmative Fillers**: Words like نعم، صحيح، أيوة، اه must be strictly retained as part of the speech flow.

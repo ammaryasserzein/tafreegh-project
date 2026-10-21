@@ -75,6 +75,15 @@ class TestMatnMatcher(unittest.TestCase):
         self.assertTrue(res_fallback.is_fallback)
         self.assertEqual(res_fallback.start_pos, -1)
 
+    def test_fallback_mode_preserves_tashkeel_inside_inner_parenthesized_citations(self):
+        seg = "مَا لَهُ أَدْرَاجٌ لِيُتَوَصَّلَ بِهِ إِلَى سَطْحٍ وَشِبْهِهِ، قَالَ تَعَالَى: (أَوْ سُلَّمًا فِي السَّمَاءِ)"
+        res_fallback = self.matcher.match_segment(seg)
+        self.assertEqual(res_fallback.mode, MatchMode.FALLBACK)
+        self.assertEqual(
+            res_fallback.text,
+            "ما له أدراج ليتوصل به إلى سطح وشبهه، قال تعالى: (أَوْ سُلَّمًا فِي السَّمَاءِ)",
+        )
+
     def test_sandwiched_fallback_context(self):
         # Primary -> Fallback -> Primary
         self.matcher.match_segment("مبادئ كل علم عشره")
@@ -190,6 +199,23 @@ class TestMatnMatcher(unittest.TestCase):
         second_idx = source.rfind("قَالَ الْمُصَنِّفُ")
         self.assertNotEqual(first_idx, second_idx)
         self.assertEqual(res_reread.start_pos, second_idx)
+
+
+    def test_overlap_reread_advances_cursor(self):
+        source = "النَّظَرُ فِي مُبْدَعَاتِهِ، وَمُدَاوَمَةُ التَّفَكُّرِ فِي مَصْنُوعَاتِهِ"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+        # Advance through first part
+        r1 = matcher.match_segment("النظر في مبدعاته")
+        self.assertEqual(r1.mode, MatchMode.PRIMARY)
+        self.assertFalse(r1.is_re_read)
+        cursor1 = matcher.cursor
+
+        # Re-read leading part while extending into new text
+        r2 = matcher.match_segment("النظر في مبدعاته ومداومة التفكر في مصنوعاته")
+        self.assertEqual(r2.mode, MatchMode.PRIMARY)
+        self.assertFalse(r2.is_re_read)
+        self.assertGreater(matcher.cursor, cursor1)
+        self.assertIn("وَمُدَاوَمَةُ التَّفَكُّرِ فِي مَصْنُوعَاتِهِ", r2.text)
 
 
 if __name__ == "__main__":

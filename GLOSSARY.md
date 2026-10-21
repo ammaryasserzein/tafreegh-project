@@ -43,3 +43,11 @@ _Avoid_: Date stem, unnumbered lecture, arbitrary filename
 **Lecture Identity**:
 A consolidated domain entity encapsulating the core identifying primitives of a lecture (`date`, `lecture_number`, `keyword`, `subject_name`, `stem`, `audio_file`). Replaces dispersed data clumps across export and training pipelines, providing unified resolution of header lines, canonical names, and cross-directory stem matching.
 _Avoid_: Identity primitives, metadata tuple, stem dict
+
+**Known Cue**:
+A Sheikh utterance pattern that reliably signals an inaudible student turn. When detected at a paragraph boundary, it triggers proactive insertion of `طالب: صوت غير مسموع.`. Maintained in the Known Cue List and refined via the Diff Loop.
+_Avoid_: Trigger phrase, prompt word, signal
+
+**Rhetorical Suffix**:
+A sentence-final particle (`ها؟`, `إيه؟`) the Sheikh uses as a teaching device to prompt class engagement, not as a genuine student-turn boundary. Excluded from Known Cue nomination by suffix filtering in the Diff Loop.
+_Avoid_: Excluded cue, blacklisted cue, suppressed phrase

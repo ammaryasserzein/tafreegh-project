@@ -422,6 +422,42 @@ class TestExportDocuments(unittest.TestCase):
             self.assertTrue(project_file.name.startswith("2026-09-10_سيرة"))
             self.assertTrue(project_file.exists())
 
+    def test_export_documents_overwrite_flag_replaces_in_place_without_ai_suffix(self):
+        sample_md_v1 = """بسم الله الرحمن الرحيم
+المادة: المنطق (السلم المنورق)
+2026-10-17
+
+الحمد لله، النسخة الأولى.
+"""
+        sample_md_v2 = """بسم الله الرحمن الرحيم
+المادة: المنطق (السلم المنورق)
+2026-10-17
+
+الحمد لله، النسخة الثانية المصححة.
+"""
+        with tempfile.TemporaryDirectory() as tmp_onedrive, tempfile.TemporaryDirectory() as tmp_project:
+            (Path(tmp_onedrive) / "المنطق").mkdir()
+            res1 = export_documents(
+                markdown_text=sample_md_v1,
+                base_onedrive=Path(tmp_onedrive),
+                project_root=Path(tmp_project),
+            )
+            self.assertEqual(res1["onedrive_file"].name, "2026-10-17.docx")
+
+            # Re-export with overwrite=True must keep 2026-10-17.docx instead of 2026-10-17 #AI.docx
+            res2 = export_documents(
+                markdown_text=sample_md_v2,
+                base_onedrive=Path(tmp_onedrive),
+                project_root=Path(tmp_project),
+                overwrite=True,
+            )
+            self.assertEqual(res2["onedrive_file"].name, "2026-10-17.docx")
+            self.assertFalse((Path(tmp_onedrive) / "المنطق" / "2026-10-17 #AI.docx").exists())
+            doc = docx.Document(str(res2["onedrive_file"]))
+            texts = [p.text for p in doc.paragraphs]
+            self.assertIn("الحمد لله، النسخة الثانية المصححة.", texts)
+
+
 
 class TestIsMatchingStem(unittest.TestCase):
     def test_normalize_stem_strips_extensions_and_suffixes(self):
