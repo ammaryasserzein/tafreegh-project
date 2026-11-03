@@ -247,6 +247,15 @@ def run_all_checks(base_dir: Path = REPO_ROOT) -> list[Finding]:
     check_coding_standards(findings, base_dir=base_dir)
     return findings
 
+
+def count_open_deferred_reviews(base_dir: Path = REPO_ROOT) -> int:
+    deferred_file = base_dir / "docs" / "agents" / "deferred-reviews.md"
+    if not deferred_file.is_file():
+        return 0
+    content = deferred_file.read_text(encoding="utf-8")
+    return sum(1 for line in content.splitlines() if "- [ ]" in line)
+
+
 def main() -> None:
     findings = run_all_checks()
     if findings:
@@ -256,6 +265,9 @@ def main() -> None:
         sys.exit(1)
     else:
         print("PASSED: Repository integrity, table formatting, and coding standards verified cleanly.")
+        open_reviews = count_open_deferred_reviews()
+        if open_reviews > 0:
+            print(f"NOTICE: {open_reviews} deferred review item(s) open in docs/agents/deferred-reviews.md")
         sys.exit(0)
 
 if __name__ == "__main__":

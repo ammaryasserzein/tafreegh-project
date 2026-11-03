@@ -217,6 +217,71 @@ class TestMatnMatcher(unittest.TestCase):
         self.assertGreater(matcher.cursor, cursor1)
         self.assertIn("وَمُدَاوَمَةُ التَّفَكُّرِ فِي مَصْنُوعَاتِهِ", r2.text)
 
+    def test_compound_sharh_prefix_with_primary_matn_tail_aligns_tail_and_advances_cursor(self):
+        source = (
+            "فَقُلْنَا: اللَّهُ أَكْبَرُ! "
+            "وَذَلِكَ أَنَّكُمْ فِي أَهْلِ الشِّرْكِ كَالشَّعْرَةِ الْبَيْضَاءِ"
+        )
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+        matcher.match_segment("فقلنا الله اكبر")
+        cursor_before = matcher.cursor
+
+        res = matcher.match_segment("ثُمَّ بَيَّنَ وَجْهَ ذَلِكَ بِقَوْلِهِ، وذلك")
+        self.assertEqual(res.mode, MatchMode.FALLBACK)
+        self.assertTrue(res.is_fallback)
+        self.assertEqual(res.text, "ثم بين وجه ذلك بقوله، وَذَلِكَ")
+        self.assertGreater(matcher.cursor, cursor_before)
+
+    def test_compound_sharh_single_word_tail_ignores_distant_occurrence_beyond_cursor_window(self):
+        filler = " ".join(["كَلِمَةٌ"] * 35)
+        source = f"بِدَايَةُ الْمَتْنِ {filler} وَذَلِكَ نِهَايَةُ الْمَتْنِ"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=1000)
+        matcher.match_segment("بداية المتن")
+        cursor_before = matcher.cursor
+
+        res = matcher.match_segment("ثم أشار الشارح بقوله، وذلك")
+        self.assertEqual(res.mode, MatchMode.FALLBACK)
+        self.assertEqual(res.text, "ثم أشار الشارح بقوله، وذلك")
+        self.assertEqual(matcher.cursor, cursor_before)
+
+    def test_compound_sharh_matn_acts_as_source_anchored_bound_for_sandwiched_fallbacks(self):
+        source = (
+            "فَقُلْنَا: اللَّهُ أَكْبَرُ! "
+            "وَذَلِكَ أَنَّكُمْ فِي أَهْلِ الشِّرْكِ كَالشَّعْرَةِ الْبَيْضَاءِ"
+        )
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+        comp = matcher.match_segment("ثم بين وجه ذلك بقوله، وذلك")
+        pure_fb = matcher.match_segment("عبارة شرح غير موجودة في المتن")
+        prim = matcher.match_segment("انكم في اهل الشرك كالشعره البيضاء")
+
+        matcher.resolve_sandwiched_fallbacks()
+        self.assertTrue(comp.is_source_anchored)
+        self.assertFalse(comp.is_sandwiched)
+        self.assertTrue(pure_fb.is_sandwiched)
+        self.assertFalse(prim.is_sandwiched)
+
+    def test_compound_sharh_single_word_tail_matches_at_active_reread_position_after_full_hadith_read(self):
+        source = (
+            "عَنْ ابْنِ مَسْعُودٍ قَالَ: إِنِّي لَأَرْجُو أَنْ تَكُونُوا نِصْفَ أَهْلِ الْجَنَّةِ، "
+            "وَذَلِكَ أَنَّ الْجَنَّةَ لَا يَدْخُلُهَا إِلَّا نَفْسٌ مُسْلِمَةٌ"
+        )
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+        # 1. Sheikh reads the entire Hadith upfront (cursor reaches end of source)
+        full = matcher.match_segment(
+            "عن ابن مسعود قال اني لارجو ان تكونوا نصف اهل الجنه وذلك ان الجنه لا يدخلها الا نفس مسلمه"
+        )
+        self.assertEqual(full.mode, MatchMode.PRIMARY)
+        self.assertEqual(matcher.cursor_norm, len(matcher.norm_source))
+
+        # 2. Sheikh re-reads clause before 'وَذَلِكَ' during commentary
+        reread = matcher.match_segment("اني لارجو ان تكونوا نصف اهل الجنه")
+        self.assertTrue(reread.is_re_read)
+
+        # 3. Commentary introduces next single-word lemma 'وَذَلِكَ' right after active re-read clause
+        comp = matcher.match_segment("ثم بين وجه ذلك بقوله، وذلك")
+        self.assertTrue(comp.is_source_anchored)
+        self.assertEqual(comp.text, "ثم بين وجه ذلك بقوله، وَذَلِكَ")
+
 
 if __name__ == "__main__":
     unittest.main()

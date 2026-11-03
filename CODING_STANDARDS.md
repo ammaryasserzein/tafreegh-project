@@ -27,3 +27,7 @@
 
 - **Model Immutability & Non-Destructive Operations**: Domain models and dataclasses maintain pure state operations. Methods such as `merge()` preserve unspecified fields from the target instance without destructive nullification.
 - **Seam Separation**: Presentation, formatting precedence, and document layout heuristics reside strictly in export and resolution seams (such as `resolve_document_identity()`), keeping core domain entities decoupled from delivery mechanics.
+
+## 7. Deferred Review Backlog
+
+- **Deferred Review Gate**: Before editing any file listed in `docs/agents/deferred-reviews.md`, read it and ask the user, per open item for that file: fix now, keep deferred, or drop.

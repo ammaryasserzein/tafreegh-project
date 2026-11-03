@@ -349,6 +349,35 @@ def _is_centered(p) -> bool:
     return False
 
 
+def _has_illegal_asterisk(stripped: str, is_matn: bool) -> bool:
+    """Returns True if stripped contains any '*' outside a spaced, vowelized parenthesized Quranic citation '(آية * آية)'."""
+    if "*" not in stripped:
+        return False
+    if "**" in stripped:
+        return True
+
+    # In a Matn block, outer parentheses double as citation parentheses
+    target = stripped
+
+    outside = re.sub(r"\([^()]+\)", "", target)
+    if "*" in outside:
+        return True
+
+    for m in re.finditer(r"\(([^()]+)\)", target):
+        inner = m.group(1)
+        if "*" not in inner:
+            continue
+        if re.search(r"(?<! )\*|\*(?! )", inner):
+            return True
+        clauses = inner.split(" * ")
+        if len(clauses) < 2:
+            return True
+        for clause in clauses:
+            if not re.search(r"[\u0600-\u06FF]", clause) or not TASHKEEL_REGEX.search(clause):
+                return True
+    return False
+
+
 def _check_headers_and_conclusion(
     doc: docx.Document,
     para_records: list[ParagraphRecord],
@@ -436,12 +465,12 @@ def _check_headers_and_conclusion(
                     stripped[:80],
                 )
 
-        if "*" in stripped:
+        if _has_illegal_asterisk(stripped, rec.is_matn):
             _flag(
                 report,
                 "FORBIDDEN_CHAR_ASTERISK",
                 rec.index,
-                f"Paragraph P{rec.index} contains literal '*' character (forbidden in .docx).",
+                f"Paragraph P{rec.index} contains literal '*' outside a spaced vowelized Quranic citation '(آية * آية)'.",
                 stripped[:80],
             )
 
@@ -586,11 +615,14 @@ def load_dialect_replacements(
                 if not target_m:
                     continue
                 target = target_m.group(1).strip()
+                raw_without_placeholders = re.sub(r"\[[^\]]*\]", "", raw_col).strip()
+                if not raw_without_placeholders:
+                    continue
                 variants = []
-                for v in raw_col.split("/"):
+                for v in raw_without_placeholders.split("/"):
                     v_clean = v.strip()
                     # Skip placeholder patterns with brackets or parenthetical context notes
-                    if not v_clean or "[" in v_clean or "(" in v_clean or v_clean == target:
+                    if not v_clean or any(ch in v_clean for ch in "[]()") or v_clean == target:
                         continue
                     variants.append(re.sub(r"\s+", r"\\s+", re.escape(v_clean)))
                 if variants:
@@ -636,12 +668,161 @@ def _strip_parenthesized_citations(text: str) -> str:
     return re.sub(r"\([^)]*\)", " ", text)
 
 
+KINSHIP_GRAMMATICAL_STOPWORDS = frozenset({
+    "ده", "في", "هنا", "هناك", "بيسأل", "يسأل", "قال", "بيقول", "يقول",
+    "بتاع", "عايز", "عاوز", "طلب", "بعث", "بعت", "كاتب", "كتب", "اللي",
+    "المسلم", "المؤمن", "الصعيدي", "الصييت", "الطالب", "الحاضر", "السائل",
+    "المصري", "التاني", "بقى", "على", "يعني", "أحد", "يبقى", "وجاي", "واعتذر",
+    "بيتساءل", "بتقول", "بيضرب", "عمال",
+})
+
+VOCATIVE_GRAMMATICAL_STOPWORDS = frozenset({
+    "سيدي", "سيدنا", "ابني", "بني", "أخي", "أخانا", "أخونا", "أخويا", "اخويا",
+    "جماعة", "إخواننا", "إخواني", "شباب", "ولاد", "أولاد", "أستاذ", "أستاذنا", "مولانا",
+    "شيخنا", "عم", "رب", "ربنا", "ربي", "الله", "رسول", "نبي", "بشر",
+    "ناس", "طالب", "طلاب", "حبيبي", "حبيبنا", "بشمهندس", "مهندس",
+    "جميل", "عسل", "عساسيل", "عسايل", "حلويات", "إما", "اما", "إيه", "ايه", "ولا",
+    "قول", "سؤال", "سلام", "نهار", "ابن", "واد", "كمن", "اللي", "ليتني", "ذا", "روح",
+})
+
+
+def _is_vocative_grammatical_non_name(token: str) -> bool:
+    if token in VOCATIVE_GRAMMATICAL_STOPWORDS:
+        return True
+    if token.endswith(("وك", "ها", "هم", "كم")):
+        return True
+    return bool(re.match(r"^ت[\u0621-\u064A]{3,}ه$", token))
+
+
+@dataclass(frozen=True)
+class AttendeeAnonymizationRules:
+    placeholder: str
+    kinship_nouns: frozenset[str]
+    kunya_prefixes: frozenset[str]
+    title_prefixes: frozenset[str]
+    exempt_names: frozenset[str]
+
+    def find_leaks(self, text: str) -> list[tuple[str, str]]:
+        """Scans stripped prose for unanonymized kinship and classroom vocative attendee references."""
+        all_prefixes = sorted(self.kunya_prefixes | self.title_prefixes, key=len, reverse=True)
+        prefix_alt = "|".join(re.escape(p) for p in all_prefixes)
+        kinship_alt = "|".join(
+            re.escape(k) for k in sorted(self.kinship_nouns, key=len, reverse=True)
+        )
+        prefix_group = rf"(?:(?:{prefix_alt})\s+)*" if prefix_alt else ""
+        voc_prefix_group = rf"(?:(?P<prefix>{prefix_alt})\s+)?" if prefix_alt else ""
+
+        leaks: list[tuple[str, str]] = []
+        if kinship_alt:
+            kinship_re = re.compile(
+                rf"(?<!\w)[وف]?(?:{kinship_alt})\s+(?P<prefixes>{prefix_group})(?P<cand>[\u0621-\u064A]{{3,}})(?!\w)"
+            )
+            for m_kin in kinship_re.finditer(text):
+                cand = m_kin.group("cand")
+                prefix_tokens = m_kin.group("prefixes").split()
+                has_kunya = any(p in self.kunya_prefixes for p in prefix_tokens)
+                if cand == self.placeholder:
+                    continue
+                if not has_kunya and (cand in self.exempt_names or cand in KINSHIP_GRAMMATICAL_STOPWORDS):
+                    continue
+                leaks.append(("reference", m_kin.group(0)))
+
+        vocative_re = re.compile(
+            rf"(?<!\w)[وف]?(?P<trig>ولا\s+(?:إيه|ايه)|إيه|ايه|ها|قول|اتفضل|تفضل|نعم|ماشي|صح|فاهم)\s+يا\s+"
+            rf"{voc_prefix_group}(?P<cand>[\u0621-\u064A]{{3,}})(?!\w)"
+        )
+        for m_voc in vocative_re.finditer(text):
+            cand = m_voc.group("cand")
+            prefix = m_voc.groupdict().get("prefix")
+            trig = m_voc.group("trig").strip()
+            if cand == self.placeholder:
+                continue
+            if prefix and prefix in self.kunya_prefixes:
+                # Exempt Egyptian rhetorical topical echo: '<word> إيه يا أبو <word>'
+                pre_window = text[max(0, m_voc.start() - 35) : m_voc.start()]
+                if trig in ("إيه", "ايه") and re.search(
+                    rf"(?<!\w)(?:[وفبكل]?ال|[وفبكل])?{re.escape(cand)}(?!\w)", pre_window
+                ):
+                    continue
+                leaks.append(("vocative", m_voc.group(0)))
+                continue
+            if cand in self.exempt_names or cand in self.title_prefixes or _is_vocative_grammatical_non_name(cand):
+                continue
+            leaks.append(("vocative", m_voc.group(0)))
+
+        return leaks
+
+
+def load_attendee_anonymization_rules(
+    rules_path: Path | str | None = None,
+) -> AttendeeAnonymizationRules:
+    """Dynamically parses Attendee Anonymization SSOT (exempt names, titles, kunyas) from references/dialect-rules.md."""
+    path = Path(rules_path) if rules_path else DEFAULT_DIALECT_RULES_PATH
+    placeholder = "فلان"
+    kinship_nouns: set[str] = set()
+    kunya_prefixes: set[str] = set()
+    title_prefixes: set[str] = set()
+    exempt_names: set[str] = set()
+
+    if not path.exists():
+        return AttendeeAnonymizationRules(
+            placeholder=placeholder,
+            kinship_nouns=frozenset(),
+            kunya_prefixes=frozenset(),
+            title_prefixes=frozenset(),
+            exempt_names=frozenset(),
+        )
+
+    text = path.read_text(encoding="utf-8")
+    header_m = re.search(r"^##\s+Attendee Anonymization\s*\(([\u0621-\u064A]+)\)", text, re.MULTILINE)
+    if header_m:
+        placeholder = header_m.group(1)
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if "Preserved Titles & Kunyas" in stripped:
+            clean_line = stripped.replace("**", "")
+            for tok in re.findall(rf"([\u0621-\u064A]+)\s+{re.escape(placeholder)}(?!\w)", clean_line):
+                if tok == "يا":
+                    continue
+                dehamza = re.sub(r"[أإآ]", "ا", tok)
+                if dehamza.startswith("اخو"):
+                    kinship_nouns.update({"أخوكم", "اخوكم", "أخونا", "اخونا", tok, dehamza})
+                elif dehamza in ("الاخ", "الاخت"):
+                    kinship_nouns.update({tok, dehamza})
+                elif dehamza in ("ابو", "ابا"):
+                    hamza_form = f"أ{dehamza[1:]}"
+                    kunya_prefixes.update({tok, dehamza, hamza_form})
+                else:
+                    base = tok[2:] if tok.startswith("ال") and len(tok) >= 5 else tok
+                    definite = tok if tok.startswith("ال") else f"ال{tok}"
+                    title_prefixes.update({
+                        base,
+                        definite,
+                        re.sub(r"[أإآ]", "ا", base),
+                        re.sub(r"[أإآ]", "ا", definite),
+                    })
+        elif "Preserved Non-Attendee Names" in stripped:
+            for grp in re.findall(r"\(([^)]+)\)", stripped):
+                exempt_names.update(re.findall(r"[\u0621-\u064A]+", grp))
+
+    return AttendeeAnonymizationRules(
+        placeholder=placeholder,
+        kinship_nouns=frozenset(kinship_nouns),
+        kunya_prefixes=frozenset(kunya_prefixes),
+        title_prefixes=frozenset(title_prefixes),
+        exempt_names=frozenset(exempt_names),
+    )
+
+
 def _check_dialect_and_dialogue(
     para_records: list[ParagraphRecord],
     report: ValidationReport,
     dialect_rules: list[tuple[re.Pattern, str]] | None = None,
+    dialect_rules_path: Path | str | None = None,
 ) -> None:
-    rules = dialect_rules if dialect_rules is not None else load_dialect_replacements()
+    rules = dialect_rules if dialect_rules is not None else load_dialect_replacements(dialect_rules_path)
+    attendee_rules = load_attendee_anonymization_rules(dialect_rules_path)
 
     for rec in para_records:
         if rec.index < HEADER_LINE_COUNT:
@@ -712,6 +893,16 @@ def _check_dialect_and_dialogue(
                     )
 
         scan_text = _strip_parenthesized_citations(stripped)
+        scan_no_quotes = strip_tashkeel(re.sub(r'"[^"]*"', " ", scan_text))
+        for leak_kind, matched_phrase in attendee_rules.find_leaks(scan_no_quotes):
+            _flag(
+                report,
+                "ATTENDEE_NAME_UNANONYMIZED",
+                rec.index,
+                f"Paragraph P{rec.index} contains unanonymized attendee {leak_kind} '{matched_phrase}'; replace personal name with '{attendee_rules.placeholder}'.",
+                stripped[:80],
+            )
+
         if "عليه الصلاة والسلام" in scan_text:
             _flag(
                 report,
@@ -812,11 +1003,10 @@ def _check_matn_alignment(
     matn_path: Path,
     report: ValidationReport,
 ) -> None:
-    """Verifies Primary Mode Matn blocks against canonical <matn_source>."""
+    """Verifies Primary Mode and compound Sharh-Matn blocks against canonical <matn_source>."""
     if not matn_path.exists():
         return
     matn_source = read_matn_source_content(matn_path)
-    matn_collapsed = re.sub(r"\s+", " ", matn_source).strip()
     matcher = SequentialMatnMatcher(matn_source)
 
     for rec in para_records:
@@ -824,25 +1014,18 @@ def _check_matn_alignment(
             continue
         stripped = rec.text.strip()
         inner = stripped[1:-1].strip() if (stripped.startswith("(") and stripped.endswith(")")) else stripped
-        inner_collapsed = re.sub(r"\s+", " ", inner).strip()
-
-        outer_without_citations = _strip_parenthesized_citations(inner_collapsed)
-        has_outer_tashkeel = bool(TASHKEEL_REGEX.search(outer_without_citations))
-        norm_query = normalize_arabic_search(inner_collapsed)
-        in_norm_source = bool(norm_query and norm_query in matcher.norm_source)
-
-        if has_outer_tashkeel or in_norm_source:
-            if inner_collapsed not in matn_collapsed:
-                _flag(
-                    report,
-                    "MATN_SOURCE_MISMATCH",
-                    rec.index,
-                    (
-                        f"Matn paragraph P{rec.index} does not match canonical <matn_source> verbatim "
-                        "(or contains unverified tashkeel in Fallback Mode)."
-                    ),
-                    inner_collapsed[:100],
-                )
+        if not matcher.verify_exported_segment(inner):
+            inner_collapsed = re.sub(r"\s+", " ", inner).strip()
+            _flag(
+                report,
+                "MATN_SOURCE_MISMATCH",
+                rec.index,
+                (
+                    f"Matn paragraph P{rec.index} does not match canonical <matn_source> verbatim "
+                    "(or contains unverified tashkeel in Fallback Mode)."
+                ),
+                inner_collapsed[:100],
+            )
 
 
 def _clean_raw_for_coverage(raw_text: str) -> list[str]:
@@ -953,6 +1136,7 @@ def verify_docx(
     raw_path: Path | str | None = None,
     matn_path: Path | str | None = None,
     context_path: Path | str | None = None,
+    dialect_rules_path: Path | str | None = None,
 ) -> ValidationReport:
     docx_path = Path(docx_path)
     report = ValidationReport(docx_path=str(docx_path))
@@ -961,7 +1145,7 @@ def verify_docx(
     para_records = _check_ooxml_styling(doc, report)
     _check_headers_and_conclusion(doc, para_records, report, context_path=context_path)
     _check_punctuation_and_orthography(para_records, report)
-    _check_dialect_and_dialogue(para_records, report)
+    _check_dialect_and_dialogue(para_records, report, dialect_rules_path=dialect_rules_path)
     _check_unbolded_fallback_matn(para_records, report)
     if matn_path:
         _check_matn_alignment(para_records, Path(matn_path), report)

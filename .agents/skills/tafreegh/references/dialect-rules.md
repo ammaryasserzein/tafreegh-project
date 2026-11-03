@@ -22,16 +22,32 @@ When Egyptian dialect expressions occur in the speaker's explanation, normalize 
 | تلاتة / ثلاثة         | **ثلاثة**                   | Preserve classical tha in numbers  |
 | تاني / ثاني           | **ثاني**                    | Preserve classical tha in ordinals |
 | تانية / ثانية         | **ثانية**                   | Preserve classical tha in ordinals |
-| يا [اسم شخص]          | **يا فلان**                 | Anonymize attendee personal names  |
+| [اسم حاضر / طالب]     | **فلان**                    | Anonymize attendee personal names  |
 | أما (بمعنى عندما)     | **لما**                     | Standardize temporal 'when' to لما |
+
+## Preposition & Existential في vs. Pronominal فيه
+
+- **في (Preposition & Colloquial Existential)**: Write **في** both for the standard preposition (_in / about_: في دراسة التركيبات، جه في مرة) and for the colloquial existential particle meaning _there is / there are_ (replaceable by يوجد or هناك: طب في سؤال إنكاري، لقى في واحد بيجاوب، في ناس عارفة، وفي هدايا، بس كان في مشركين).
+- **فيه (Preposition + Masculine Pronoun Only)**: Write **فيه** exclusively when هاء الضمير refers back to a specific masculine antecedent (_in it / therein_, replaceable by في داخله or في هذا الشيء: السؤال فيه بشرى، السند فيه حاجة، العلم يبحث فيه، يوم القيامة وما يكون فيه).
+
+## Attendee Anonymization (فلان)
+
+- **Role-Independent Anonymization**: Replace any live lecture attendee, student, or room participant's personal name with **فلان** across every grammatical position:
+  - Direct vocative address: يا فلان، ولا إيه يا فلان؟
+  - Third-person classroom reference: طيب أخوكم فلان بيسأل، زي ما قال فلان.
+  - Classroom illustrations anchored to a present attendee: يعني لما نقول مثلا: فلان بيعمل إيه دلوقتي؟
+- **Preserved Titles & Kunyas**: Retain relational, scholarly, or kunya prefixes before **فلان**: أخوكم فلان، الشيخ فلان، يا دكتور فلان، أبو فلان، يا أبا فلان، الأخ فلان، الأخت فلان.
+- **Preserved Non-Attendee Names**: Retain classical textbook hypothetical placeholders (زيد، عمرو، بكر، هند), historical or narrative figures (جحا)، the fixed ceremonial thank-you name (إبراهيم), and scholars or Companions.
 
 ## Colloquial Negation Rules
 
 - **Fused Negation Particles**: Single connected word: **مفيهوش**، **مالهاش**، **ملوش**، **مفيش**، **مكانوش**، **ميقفوش**.
 - **Compound Verb Negation**: Write ما + فعل + ش as separate particles: **ما جتش**، **ما حصلش**، **ما حدش**.
 
-## Laughter, Fillers & Affirmations
+## Laughter, Fillers, Repetitions & Affirmations
 
 - **Laughter**: Always record as ههههه.
 - **Stutters & Vocal Fillers**: Auditory hesitations (آآ، ا، أ) are stripped automatically.
 - **Affirmative Fillers**: Words like نعم، صحيح، أيوة، اه must be strictly retained as part of the speech flow.
+- **Spoken Word Repetition**: Retain consecutive repeated words verbatim separated by an Arabic comma: الكلمة، الكلمة (e.g., إما بمعنى الذي، الذي قدمت يداه / يعني إثبات، إثبات شيء / هو أنت مثلا، مثلا؟ / اجتهد، اجتهد). Keep fixed lexicalized colloquial adverbial reduplications space-separated without a comma (كدا كدا، واحدة واحدة، شوية شوية).
+- **Cut-Off Definite Articles**: Retain a spoken cut-off definite article before a self-interruption or restart followed by an Arabic comma (e.g., لم يأتوا بها بصيغة ال، اكتبوا الفائدة).

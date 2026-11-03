@@ -15,7 +15,12 @@ scripts_dir = Path(__file__).parent.parent / "scripts"
 sys.path.insert(0, str(scripts_dir))
 
 from export_docx import create_docx
-from verify_docx import verify_docx, Severity, load_dialect_replacements
+from verify_docx import (
+    verify_docx,
+    Severity,
+    load_dialect_replacements,
+    load_attendee_anonymization_rules,
+)
 
 
 VALID_MINIMAL_MD = """بسم الله الرحمن الرحيم
@@ -129,6 +134,64 @@ class TestVerifyDocxHeaderAndConclusion(unittest.TestCase):
             codes = [i.code for i in report.issues if i.severity == Severity.ERROR]
             self.assertIn("LEAKED_METADATA", codes)
             self.assertIn("FORBIDDEN_CHAR_ASTERISK", codes)
+
+    def test_allows_spaced_asterisk_between_vowelized_quranic_ayahs_while_rejecting_invalid_asterisks(self):
+        valid_quran_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+قال تعالى: (عَمَّ يَتَسَاءَلُونَ * عَنِ النَّبَإِ الْعَظِيمِ * الَّذِي هُمْ فِيهِ مُخْتَلِفُونَ) في سورة النبأ.
+
+**(قال المصنف رحمه الله في الآية: (وَلَا تَقُولَنَّ لِشَيْءٍ إِنِّي فَاعِلٌ ذَلِكَ غَدًا * إِلَّا أَنْ يَشَاءَ اللَّهُ))**
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        invalid_asterisks_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+آية بدون مسافة قبل النجمة: (عَمَّ يَتَسَاءَلُونَ* عَنِ النَّبَإِ الْعَظِيمِ) في الشرح.
+
+شعر بدون تشكيل: (شطر أول * شطر ثاني) في الشرح.
+
+**(الشَّطْرُ الْأَوَّلُ * الشَّطْرُ الثَّانِي)**
+
+شرح فيه تسريب ماركداون، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ok_docx = Path(tmpdir) / "valid_quran_asterisk.docx"
+            create_docx(valid_quran_md, ok_docx)
+            rep_ok = verify_docx(ok_docx)
+            self.assertTrue(rep_ok.passed, f"Expected spaced vowelized Quranic '*' to pass, got: {rep_ok.issues}")
+
+            bad_docx = Path(tmpdir) / "invalid_asterisks.docx"
+            create_docx(invalid_asterisks_md, bad_docx)
+            doc_bad = docx.Document(str(bad_docx))
+            doc_bad.paragraphs[6].runs[0].text = doc_bad.paragraphs[6].runs[0].text.replace(
+                "ماركداون", "**متن**"
+            )
+            doc_bad.save(str(bad_docx))
+            rep_bad = verify_docx(bad_docx)
+            ast_paras = [i.paragraph_index for i in rep_bad.issues if i.code == "FORBIDDEN_CHAR_ASTERISK"]
+            # Paragraph 5 **(الشَّطْرُ الْأَوَّلُ * الشَّطْرُ الثَّانِي)** is syntactically identical to a vowelized
+            # ayah pair, so outer parens double as citation parens and it is not flagged here.
+            self.assertEqual(ast_paras, [3, 4, 6])
+
+    def test_standalone_bold_ayah_matn_allows_spaced_asterisk(self):
+        md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+**(عَمَّ يَتَسَاءَلُونَ * عَنِ النَّبَإِ الْعَظِيمِ)**
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "standalone_ayah.docx"
+            create_docx(md, docx_path)
+            report = verify_docx(docx_path)
+            ast_issues = [i for i in report.issues if i.code == "FORBIDDEN_CHAR_ASTERISK"]
+            self.assertEqual(len(ast_issues), 0, f"Expected standalone bold Ayah Matn to pass, got: {ast_issues}")
 
     def test_detects_wrong_concluding_dua(self):
         # Like line 89 of 2026-10-17_AI.md: وصلى الله instead of وصل اللهم, plus extra commas
@@ -260,6 +323,10 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
         self.assertIn("كدا", targets)
         self.assertIn("مفيش", targets)
         self.assertIn("ثاني", targets)
+        # Bracketed placeholder row '| [اسم حاضر / طالب] | **فلان** |' must not compile spurious patterns
+        self.assertNotIn("فلان", targets)
+        for pat, _ in rules:
+            self.assertNotIn("طالب", pat.pattern)
 
     def test_loads_dialect_replacements_from_backtick_free_format(self):
         backtick_free_md = """# Egyptian Colloquial Normalization Dictionary
@@ -338,6 +405,127 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
             self.assertIn("INAUDIBLE_COMPLETE_PARENS_FORBIDDEN", codes)
             self.assertIn("INAUDIBLE_PARTIAL_PARENS_MISSING", codes)
             self.assertIn("STUDENT_TERMINAL_PUNCTUATION_MISSING", codes)
+
+    def test_detects_unanonymized_attendee_names_while_allowing_fulan_titles_joha_and_hadiths(self):
+        leaked_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+طيب أخوكم معاذ بيسأل عن الاستفهام الإنكاري.
+
+يبقى حتى لو آخر واحد كويس برضه، ولا إيه يا خالد؟
+
+طيب أخوكم أبو معاذ بيسأل عن الحديث.
+
+ماشي يا أبا معاذ؟
+
+إيه يا خالد هنفصله ولا إيه؟
+
+طيب أخوكم الوليد قال كلامًا مفيدًا، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        clean_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+طيب أخوكم فلان بيسأل، وأخوكم الشيخ فلان قال كذا، وأخوكم أبو فلان سأل، وولا إيه يا فلان؟ وماشي يا دكتور فلان، وماشي يا أبا فلان؟ وإيه يا فلان هنفصله ولا إيه؟ وتعدد إيه يا أبو تعدد؟ وأخونا الصعيدي زمان قال كذا، وإيه يا جحا ما جبتش؟ وماشي يا سيدي، وقال النبي صلى الله عليه وسلم: "يَا مُعَاذُ أَتَدْرِي مَا حَقُّ اللَّهِ عَلَى الْعِبَادِ"، ولما نقول مثلًا: زيد ضرب عمرو، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            leaked_docx = Path(tmpdir) / "leaked_names.docx"
+            create_docx(leaked_md, leaked_docx)
+            rep_bad = verify_docx(leaked_docx)
+            leak_paras = [i.paragraph_index for i in rep_bad.issues if i.code == "ATTENDEE_NAME_UNANONYMIZED"]
+            self.assertEqual(leak_paras, [3, 4, 5, 6, 7, 8])
+
+            clean_docx = Path(tmpdir) / "clean_names.docx"
+            create_docx(clean_md, clean_docx)
+            rep_ok = verify_docx(clean_docx)
+            self.assertTrue(rep_ok.passed, f"Expected anonymized & non-attendee names to pass, got: {rep_ok.issues}")
+
+    def test_loads_attendee_anonymization_ssot_dynamically_from_dialect_rules_md(self):
+        default_ssot = load_attendee_anonymization_rules()
+        self.assertEqual(default_ssot.exempt_names, frozenset({"زيد", "عمرو", "بكر", "هند", "جحا", "إبراهيم"}))
+        self.assertTrue({"أبو", "أبا"}.issubset(default_ssot.kunya_prefixes))
+        self.assertTrue({"الشيخ", "شيخ", "الدكتور", "دكتور"}.issubset(default_ssot.title_prefixes))
+
+        custom_rules_md = """# Egyptian Colloquial Normalization Dictionary
+
+| Spoken / Raw Phonetic | Mandatory Standardized Form | Grammatical & Orthographic Notes |
+| :--- | :--- | :--- |
+| [اسم حاضر / طالب] | **فلان** | Anonymize attendee personal names |
+
+## Attendee Anonymization (فلان)
+
+- **Preserved Titles & Kunyas**: Retain prefixes before **فلان**: أخوكم فلان، يا نقيب فلان، أبو فلان.
+- **Preserved Non-Attendee Names**: Retain placeholders (أشعب، دعد).
+"""
+        doc_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+إيه يا أشعب عامل إيه؟ وماشي يا نقيب فلان.
+
+وماشي يا نقيب طارق؟
+
+وإيه يا جحا ما جبتش؟ والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            rules_path = Path(tmpdir) / "custom_dialect_rules.md"
+            rules_path.write_text(custom_rules_md, encoding="utf-8")
+            docx_path = Path(tmpdir) / "ssot_attendee.docx"
+            create_docx(doc_md, docx_path)
+
+            rep = verify_docx(docx_path, dialect_rules_path=rules_path)
+            leak_paras = [i.paragraph_index for i in rep.issues if i.code == "ATTENDEE_NAME_UNANONYMIZED"]
+            self.assertEqual(leak_paras, [4, 5])
+
+    def test_flags_nam_tafaddal_vocatives_and_al_akh_kinship_while_passing_fulan_forms(self):
+        rules = load_attendee_anonymization_rules()
+        self.assertTrue({"الأخ", "الأخت"}.issubset(rules.kinship_nouns))
+
+        leaking_phrases = [
+            "نعم يا معاذ؟",
+            "تفضل يا معاذ",
+            "الأخ معاذ سأل",
+            "الأخت سارة سألت",
+        ]
+        for phrase in leaking_phrases:
+            with self.subTest(phrase=phrase):
+                self.assertTrue(rules.find_leaks(phrase), f"Expected leak for: {phrase}")
+
+        clean_phrases = [
+            "نعم يا فلان؟",
+            "تفضل يا فلان",
+            "الأخ فلان سأل",
+            "الأخت فلان سألت",
+            "نعم يا سيدي",
+            "نعم يا روح أمك، قال الاستواء معلوم",
+            "الأخ المصري عمال يكلمه، حتى الأخ وجاي يطلب منه، فالأخ بقى قاله",
+            "فالأخ بيتساءل، ولو أن الأخت بتقول للتانية، والأخ التاني برضه",
+            "وبيضرب الأخ على قفاه، والجزار أخ الأخ يعني، وجبنا الأخ واعتذر له",
+            "الأخ أحد هؤلاء، وبعد كدا الأخ يبقى أقل حاجة",
+            "في نهاية الاحتفال نشكر الأخ إبراهيم",
+        ]
+        for phrase in clean_phrases:
+            with self.subTest(phrase=phrase):
+                self.assertEqual(rules.find_leaks(phrase), [])
+
+    def test_docx_flags_nam_tafaddal_and_al_akh_leaks_end_to_end(self):
+        leaked_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+نعم يا معاذ؟
+
+تفضل يا معاذ
+
+الأخ معاذ سأل عن الحديث.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "nam_tafaddal.docx"
+            create_docx(leaked_md, docx_path)
+            rep = verify_docx(docx_path)
+            leak_paras = [i.paragraph_index for i in rep.issues if i.code == "ATTENDEE_NAME_UNANONYMIZED"]
+            self.assertEqual(leak_paras, [3, 4, 5])
 
 
 class TestVerifyDocxCoverageAndFallbackMatn(unittest.TestCase):
@@ -425,6 +613,71 @@ button_magic Source guide
             codes = [i.code for i in rep_bad.issues]
             self.assertIn("MATN_SOURCE_MISMATCH", codes)
 
+    def test_matn_alignment_allows_compound_fallback_sharh_with_primary_matn_tail(self):
+        matn_md = """# رياض الصالحين
+فَقُلْنَا: اللَّهُ أَكْبَرُ! وَذَلِكَ أَنَّكُمْ فِي أَهْلِ الشِّرْكِ كَالشَّعْرَةِ الْبَيْضَاءِ
+"""
+        valid_compound_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+**(ثم بين وجه ذلك بقوله، وَذَلِكَ)**
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        corrupted_tail_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+**(ثم بين وجه ذلك بقوله، وَذَلِكُمْ)**
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            matn_path = Path(tmpdir) / "matn.md"
+            matn_path.write_text(matn_md, encoding="utf-8")
+
+            ok_docx = Path(tmpdir) / "compound_ok.docx"
+            create_docx(valid_compound_md, ok_docx)
+            rep_ok = verify_docx(ok_docx, matn_path=matn_path)
+            self.assertTrue(rep_ok.passed, f"Expected compound Sharh+Matn to pass, got: {rep_ok.issues}")
+
+            bad_docx = Path(tmpdir) / "compound_bad.docx"
+            create_docx(corrupted_tail_md, bad_docx)
+            rep_bad = verify_docx(bad_docx, matn_path=matn_path)
+            codes = [i.code for i in rep_bad.issues]
+            self.assertIn("MATN_SOURCE_MISMATCH", codes)
+
+            vowelized_prefix_md = valid_compound_md.replace(
+                "ثم بين وجه ذلك بقوله، وَذَلِكَ",
+                "ثُمَّ بَيَّنَ وجه ذلك بقوله، وَذَلِكَ",
+            )
+            bad_prefix_docx = Path(tmpdir) / "compound_bad_prefix.docx"
+            create_docx(vowelized_prefix_md, bad_prefix_docx)
+            rep_prefix = verify_docx(bad_prefix_docx, matn_path=matn_path)
+            self.assertIn("MATN_SOURCE_MISMATCH", [i.code for i in rep_prefix.issues])
+
+            filler = " ".join(["كَلِمَةٌ"] * 35)
+            distant_matn_path = Path(tmpdir) / "distant_matn.md"
+            distant_matn_path.write_text(
+                f"بِدَايَةُ الْمَتْنِ {filler} وَذَلِكَ نِهَايَةُ الْمَتْنِ",
+                encoding="utf-8",
+            )
+            distant_compound_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+**(بِدَايَةُ الْمَتْنِ)**
+
+**(ثم أشار الشارح بقوله، وَذَلِكَ)**
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+            distant_docx = Path(tmpdir) / "compound_distant.docx"
+            create_docx(distant_compound_md, distant_docx)
+            rep_distant = verify_docx(distant_docx, matn_path=distant_matn_path)
+            self.assertIn("MATN_SOURCE_MISMATCH", [i.code for i in rep_distant.issues])
+
     def test_detects_unbolded_fallback_matn_segments_in_explanation(self):
         # Tests general trigger rules (قالوا, فإن قلت, قال الشاعر, قلت, فصل في, قال, وأيضا)
         md = """بسم الله الرحمن الرحيم
@@ -454,6 +707,20 @@ button_magic Source guide
             self.assertIn(5, flagged_paras)
             self.assertIn(7, flagged_paras)
             self.assertIn(8, flagged_paras)
+
+    def test_colloquial_narrative_after_qala_does_not_trigger_unbolded_fallback_matn(self):
+        md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+رايح فين يا جحا؟ قال هشتري حمار من السوق، فلما رجع بقى قالوا له إيه يا جحا ما جبتش ليه؟ ما اشتريتش الحمار ليه؟ قال: الفلوس اتسرقت إن شاء الله، يعني هو عرف بقى إن كل حاجة بمشيئة الله، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "joha_story.docx"
+            create_docx(md, docx_path)
+            report = verify_docx(docx_path)
+            fb_issues = [i for i in report.issues if i.code == "UNBOLDED_FALLBACK_MATN"]
+            self.assertEqual(fb_issues, [], f"Expected zero UNBOLDED_FALLBACK_MATN on colloquial anecdote, got: {fb_issues}")
 
 
 class TestVerifyDocxCLI(unittest.TestCase):

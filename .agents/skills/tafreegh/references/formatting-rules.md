@@ -29,7 +29,10 @@
 ## 4. Quranic Text and Prophetic Hadiths
 
 - **The Holy Quran**: Enclose Quranic citations within single parentheses `( )`, fully vowelized (tashkeel) according to the authentic Uthmani script, **even if the Sheikh quotes a partial fragment or single word**.
-- **Prophetic Hadiths**: Enclose statements of the Prophet صلى الله عليه وسلم within quotation marks `" "`.
+- **Consecutive Quranic Verses**:
+  - **Continuous Multi-Ayah Recitation**: Enclose two or more consecutive Mushaf verses recited continuously inside a single parenthesized block separated by a spaced asterisk: (آية * آية) — e.g., (عَمَّ يَتَسَاءَلُونَ * عَنِ النَّبَإِ الْعَظِيمِ * الَّذِي هُمْ فِيهِ مُخْتَلِفُونَ) and (وَلَا تَقُولَنَّ لِشَيْءٍ إِنِّي فَاعِلٌ ذَلِكَ غَدًا * إِلَّا أَنْ يَشَاءَ اللَّهُ).
+  - **Separate Citations or Paused Fragments**: Enclose non-consecutive verses or paused single-verse fragments in separate parentheses joined by an Arabic comma: (آية)، (آية) — e.g., (عَنِ النَّبَإِ)، (الْعَظِيمِ).
+- **Prophetic Hadiths**: Enclose statements of the Prophet صلى الله عليه وسلم within quotation marks `" "`, including verbatim Hadiths quoted inside unvowelized Fallback Sharh blocks — e.g., **(قال النووي أيضا: قد جاء في الحديث الآخر "إن أهل الجنة 120 صفا هذه الأمة منها 80 صفا")**.
 - **Salawat**: Always write out in full: صلى الله عليه وسلم.
 
 ## 5. Header Architecture & Automated Metadata Extraction
@@ -58,5 +61,5 @@
   - Zero Hallucination Rule: If no conversational cue exists from the Sheikh, leave merged; user inserts طالب: صوت غير مسموع. in Word review to train the system.
 - **Distinction Criteria**:
   - Direct answers to the Sheikh, live objections, and replies to يا فلان get طالب: .
-  - Pedagogical devices (questions the Sheikh immediately answers himself, hypothetical debate "تقول لي وأقول لك") remain in the Sheikh's speech without طالب: .
-- **Anonymization of Attendee Names**: When the Sheikh addresses an attendee by their personal name (e.g., يا أحمد), anonymize the name to يا فلان.
+  - **Echoed Student Turn**: When an attendee answers faintly and the Sheikh repeats their words aloud with questioning or evaluative intonation (e.g., تيجي تكذيبية؟، إنكار السؤال؟، حقنا؟), emit طالب: صوت غير مسموع. on its own line and keep the echoed phrase at the start of the Sheikh's response paragraph.
+  - Pedagogical devices (questions the Sheikh immediately answers himself such as ده كلام الإمام مين؟ النووي. or hypothetical debate "تقول لي وأقول لك") remain continuous in the Sheikh's speech.

@@ -131,3 +131,22 @@ def test_check_no_root_scratch_flags_unauthorized_scratch(tmp_path):
     flagged_files = {f.file_path for f in scratch_findings}
     assert flagged_files == {"detailed_diff.py", "temp.md"}
 
+
+def test_count_open_deferred_reviews(tmp_path):
+    assert verify_repo.count_open_deferred_reviews(base_dir=tmp_path) == 0
+
+    deferred_dir = tmp_path / "docs" / "agents"
+    deferred_dir.mkdir(parents=True)
+    deferred_file = deferred_dir / "deferred-reviews.md"
+    content = (
+        "# Backlog\n\n"
+        "| ID | Status |\n"
+        "| --- | --- |\n"
+        "| D1 | - [ ] open |\n"
+        "| D2 | - [x] done |\n"
+        "| D3 | - [ ] open |\n"
+    )
+    deferred_file.write_text(content, encoding="utf-8")
+    assert verify_repo.count_open_deferred_reviews(base_dir=tmp_path) == 2
+
+

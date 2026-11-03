@@ -32,15 +32,11 @@ Process automated raw draft transcripts (`<draft_transcript>`) and align them wi
 
 1. **Verbatim Textual Mirroring**:
    - Transcribe spoken words in `<draft_transcript>` with a strict one-to-one correspondence, preserving Egyptian colloquialisms, spoken grammar, and the speaker's natural phrasing.
-2. **Retention of Repetitive Loops & Audio Cues**:
-   - Preserve automated transcription loops, spontaneous jokes, whispers, and deliberate repetitions verbatim as uttered.
-   - Standardize laughter to: ههههه.
-   - Strip only isolated vocal hesitation sounds: (آآ، ا، أ).
-3. **Retention of Affirmative Fillers**:
-   - Retain affirmative particles (نعم، صحيح، أيوة، اه) inline as part of the Sheikh's continuous verbal flow.
-4. **Standardization of Salawat**:
+2. **Spoken Audio Cues & Colloquialisms**:
+   - Preserve loops, audio cues, laughter, fillers, repetitions, and colloquial phrasing per [Egyptian Colloquial Dictionary](references/dialect-rules.md).
+3. **Standardization of Salawat**:
    - Standardize verbal honors such as عليه الصلاة والسلام to: صلى الله عليه وسلم.
-5. **Course-Specific Linguistic Context**:
+4. **Course-Specific Linguistic Context**:
    - **فقه البيوع (سعد الخثلان)** (Lecturer: Sheikh Osama): The Sheikh lectures primarily in Classical Arabic (فصحى) with occasional Egyptian dialect idioms. Transcribe spoken Classical Arabic verbatim as uttered with natural spoken endings.
 
 ---
@@ -67,6 +63,7 @@ Execute when `<matn_source>` is provided:
        - **≤ 5 Old Words**: Merge old and new words into one standalone bold block **(القديم والجديد)** on a new line.
        - **> 5 Old Words**: Place the old words inline at the end of the current paragraph (الكلمات القديمة), break with a single newline (`\n`), and isolate the new words on the next line as **(الكلمات الجديدة)**. When the Sheikh reads both continuously with zero intervening explanation, merge them into a single standalone block **(القديم والجديد)**.
    - **Large Block Recounts**: When the last bolded Matn block exceeds 2 sentences, isolate the Sheikh's first extracted sub-clause on its own bold line **(الكلمات)** so it becomes the new reference anchor for subsequent inline citations.
+   - **Anchor Expiry**: When `>= 500` words (`~2,500` chars / `1+` Word page) of commentary or a mid-lecture break du'a intervene since a Matn clause's last bold appearance, expire that bold anchor: reset clause re-reads that resume or anchor explanation (e.g., after طيب نرجع ثاني: / قال: / فقالوا:) to standalone bold **(نص المتن المشكول)**, while keeping fleeting 1–2 word mid-sentence grammatical callbacks inline as (الكلمة).
    - **Inline Re-read Verses**: Format previously bolded verses or hemistichs re-read inside commentary as regular-weight inline citations (الشطر الأول، الشطر الثاني), joining hemistichs with a single space or an Arabic comma (،).
    - **Splitting Interrupted Matn/Sharh Clauses**: When the Sheikh interrupts a Matn or Sharh sentence mid-clause with commentary or a correction, split at the interruption: isolate each spoken Matn/Sharh segment on its own bold line **(...)** and place the Sheikh's commentary on regular unbolded paragraphs between them.
 
@@ -76,11 +73,13 @@ Execute when `<matn_source>` is provided and a spoken book segment misses both f
 
 1. **Per-Segment Switching**:
    - Switch dynamically between **Primary Mode** (vowelized `<matn_source>` text) and **Fallback Mode** (unvowelized book text). Detect missing Sharh/Matn segments directly from `<draft_transcript>` and `<matn_source>` using transition cues (قال، قالوا، فإن قلت، قلت، وأيضا، فصل في، قال الشاعر), a 100% Classical Arabic linguistic fingerprint, and sandwiched context (reserving `04_Training_Data` strictly for the Section 7 Diff Loop).
+   - **Compound Sharh-Matn**: When an unvowelized commentator transition ending in بقوله، / في قوله، / قوله: flows continuously into a canonical `<matn_source>` token or clause, preserve them in one standalone bold block **(ثم بين وجه ذلك بقوله، وَذَلِكَ)**.
+   - **Seam Repetition**: When a repeated word straddles the final token of a Fallback Matn reading and the Sheikh's immediate lexical gloss (e.g., فأخبر به بعد بعد ذلك يعني), close the standalone bold Matn block on the first token **(… فأخبر به بعد)** and open the explanation paragraph on a new line with the second token (بعد ذلك يعني.).
 2. **Context-Dependent Conservative Doubt**:
    - **Sandwiched Segments (Relaxed Doubt)**: When an unmatched Classical Arabic segment is bounded before and after by verified **Primary Mode** matches, classify it as a book omission and isolate it as Matn.
    - **Isolated Segments (Strict Doubt)**: When an unmatched segment lies outside sandwiched context, require an explicit transition cue and a pure Classical Arabic linguistic fingerprint before isolating it as Matn; keep unverified classical phrases inside explanation prose.
 3. **Fallback Marker (`<!-- fallback -->`)**:
-   - Prepend `<!-- fallback -->` above the standalone unvowelized Matn block in `.md` output (preserve canonical tashkeel only inside inner parenthesized Quranic citations):
+   - Prepend `<!-- fallback -->` above the standalone unvowelized Matn block in `.md` output (formatting inner citations per [Formatting & Microsoft Word Rules](references/formatting-rules.md) § 4):
      `<!-- fallback -->`
      **(نص المتن المستكشف بدون تشكيل)**
 4. **Hybrid Summary Report**:
@@ -93,7 +92,7 @@ Execute when `<matn_source>` is absent:
 1. **Transition Cues (Triggers)**:
    - Detect reading boundaries after verbal cues: قال، يقول، بيقول، روى، جاء في الكتاب، قال المصنف، قالوا، فإن قلت، قلت، وأيضا، فصل في، قال الشاعر.
 2. **Linguistic Fingerprint**:
-   - Isolate 100% Classical Arabic (فصحى) book readings as **(نص المتن)** in plain orthography (preserving tashkeel only inside inner parenthesized Quranic citations). Close the Matn block at the first Egyptian colloquial marker.
+   - Isolate 100% Classical Arabic (فصحى) book readings as **(نص المتن)** in plain orthography (formatting inner citations per [Formatting & Microsoft Word Rules](references/formatting-rules.md) § 4). Close the Matn block at the first Egyptian colloquial marker.
 3. **Conservative Doubt**:
    - Keep ambiguous classical phrases inside regular explanation prose or standard Quran/Hadith punctuation unless book reading is unambiguous.
 
@@ -108,9 +107,10 @@ Execute when `<matn_source>` is absent:
    - Reserve bold styling exclusively for standalone Matn blocks **(نص المتن المشكول)**.
    - **Distinction Criteria**:
      1. _Direct Responses_: Answers to questions directed to the room (e.g., Sheikh asks: شهر كام؟ -> Student on new line: طالب: شهر رمضان.).
-     2. _Live Objections & Comments_: Counter-arguments or comments initiated by attendees (e.g., طالب: بس كان فيه مشركين بيحجوا.).
+     2. _Live Objections & Comments_: Counter-arguments or comments initiated by attendees (e.g., طالب: بس كان في مشركين بيحجوا.).
      3. _Direct Address Responses_: Replies when addressed as يا فلان.
-     4. _Sheikh's Rhetorical Devices_: Keep self-answered pedagogical questions (هل هذا واجب؟ لا ليس بواجب), hypothetical debates (تقول لي وأقول لك), and restated questions (أخونا بيسأل عن كذا) continuous within the Sheikh's paragraph.
+     4. _Echoed Student Turn_: Attribute faint student answers echoed aloud by the Sheikh per [Formatting & Microsoft Word Rules](references/formatting-rules.md) (§ 6).
+     5. _Sheikh's Rhetorical Devices_: Keep self-answered pedagogical questions (ده كلام الإمام مين؟ النووي. / هل هذا واجب؟ لا ليس بواجب), hypothetical debates (تقول لي وأقول لك), and restated questions (أخونا بيسأل عن كذا) continuous within the Sheikh's paragraph.
 3. **Inaudible or Muffled Student Speech**:
    - **Complete Silence**: Format total inaudible student turns without parentheses:
      طالب: صوت غير مسموع.
@@ -129,12 +129,15 @@ Execute when `<matn_source>` is absent:
        8. الحكاية؟ (prompting for confirmation)
        9. إيه السؤال طيب؟ اللي عارف السؤال ياخد توفي. (quizzing students)
        10. حد بيسأل حاجة؟ (asking if anyone has a question)
+       11. ما حدش بينطق. (prompting a silent room after a question)
+       12. أخرجه مين ومين؟ (quizzing students on Hadith compilers)
+       13. أنا مش سامع (inserting طالب: صوت غير مسموع. immediately before the reaction paragraph)
      - **Rhetorical Suffix Filtering**:
        Treat sentences ending with a **Rhetorical Suffix** (ها؟ or إيه؟) as pedagogical engagement within the Sheikh's speech; `diff_cues.py` filters these suffixes out of **Known Cue** nomination.
      - **Conservative Attribution**:
-       Insert proactive inaudible student turns exclusively after a matched **Known Cue** at a thought boundary; otherwise keep speech continuous in the Sheikh's paragraph so human review can mark new cues for the Diff Loop.
-4. **Attendee Name Anonymization**:
-   - Replace personal attendee names in direct address (e.g., يا أحمد) with: يا فلان.
+       Insert proactive inaudible student turns after a matched **Known Cue** at a thought boundary, or immediately before a reaction signaled by cue 13; otherwise keep speech continuous in the Sheikh's paragraph so human review can mark new cues for the Diff Loop.
+4. **Attendee Anonymization**:
+   - Apply role-independent **Attendee Anonymization** (فلان) across live lecture participants per [Egyptian Colloquial Dictionary](references/dialect-rules.md).
 5. **Interruption During Matn Reading**:
    - When a student interrupts an active Matn reading, close the Matn block `)**`, place طالب: (نص المداخلة)؟ on the next line, and resume the Matn block on the following line **(تكملة المتن)**.
 6. **Audible Scope**:
@@ -144,7 +147,7 @@ Execute when `<matn_source>` is absent:
 
 ## Section 4: Header, Formatting & Microsoft Word Compatibility
 
-Apply [Formatting & Microsoft Word Rules](references/formatting-rules.md) as the single source of truth for bracket hugging (§ 1), Word bold/spacing/ellipsis/punctuation rules (§ 2), paragraph-terminal periods and Arabic orthography (§ 3), Quran/Hadith enclosures (§ 4), header architecture (§ 5), and dialogue formatting (§ 6):
+Apply [Formatting & Microsoft Word Rules](references/formatting-rules.md) as the single source of truth for bracket hugging (§ 1), Word bold, spacing, ellipsis, and punctuation rules (§ 2), paragraph-terminal periods and Arabic orthography (§ 3), Quranic citations and Prophetic Hadiths (§ 4), header architecture (§ 5), and dialogue formatting (§ 6):
 
 1. **Lecture Identity & 3-Line Centered Header**:
    - Resolve `LectureIdentity` (date `YYYY-MM-DD` or **Numbered Lecture Stem** `[N]-[subject]_[N]` / المحاضرة: رقم, plus subject keyword mapped via the Routing Table in `CONTEXT.md`).
@@ -154,9 +157,7 @@ Apply [Formatting & Microsoft Word Rules](references/formatting-rules.md) as the
      2026-10-17 (أو المحاضرة: رقم المحاضرة)
 2. **Word Base Styling (`Word base.docx`)**:
    - 0.5-inch margins on all 4 sides, `Traditional Arabic` 18pt, inherited template text color, RTL paragraph/run direction (`w:bidi`, `w:rtl`), and bold runs (`w:b`, `w:bCs`) restricted exclusively to standalone Matn blocks **(المتن)**.
-3. **Quran, Hadith, Poetry & Numbers**:
-   - **Quran**: Enclose all Quranic citations (full verses, partial clauses, or single words) in regular-weight parentheses (آية) with full Uthmani tashkeel.
-   - **Hadith**: Enclose verbatim or near-verbatim Prophetic statements in quotation marks "حديث"; keep paraphrased references unquoted.
+3. **Poetry & Round Thousands**:
    - **Poetry**: Isolate standalone verses with a spaced ellipsis between hemistichs: الشطر الأول `...` الشطر الثاني or **(الشطر الأول `...` الشطر الثاني)** per [references/formatting-rules.md](references/formatting-rules.md) (§ 2). Format inline re-reads per Section 2 (Inline Re-read Verses).
    - **Round Thousands**: Write round thousands textually: 30 ألف، 5 آلاف، ألفين، ألف.
 
@@ -164,7 +165,7 @@ Apply [Formatting & Microsoft Word Rules](references/formatting-rules.md) as the
 
 ## Section 5: Egyptian Colloquial Normalization
 
-Apply the [Egyptian Colloquial Dictionary](references/dialect-rules.md) as the single source of truth for all spoken Egyptian dialect spelling normalizations (canonical table entries), fused nominal negation particles, separated compound verb negations (ما + فعل + ش), laughter, stutter stripping, and affirmative filler retention.
+Apply [Egyptian Colloquial Dictionary](references/dialect-rules.md) as the single source of truth for Egyptian spelling normalizations, preposition/existential في vs. pronominal فيه disambiguation, **Attendee Anonymization** (فلان), negation particles, verbatim spoken word repetitions, audio cues, and filler retention.
 
 ---
 
@@ -208,6 +209,7 @@ Execute these steps in order to complete a transcription run:
      - `fallback_correction` (**Fallback Correction**): User revisions to segments marked with `<!-- fallback -->`, isolated from copy errors to preserve training signal fidelity.
      - `oral_citation` (متن شفهي عارض / نقل مستقل): User-bolded `**(...)**` segments around oral citations or Hadiths outside `<matn_source>`.
      - `matn_copy_error`: Alignment or boundary discrepancies against `<matn_source>`.
+     - `anchor_expiry_reread`: User-bolded re-reads of previously bolded clauses after **Anchor Expiry**.
    - **Student Cues Detection (`diff_cues.py`)**:
      - Extracts preceding Sheikh statements before user-inserted طالب: صوت غير مسموع. as **Known Cue** candidates while filtering out **Rhetorical Suffix** endings (ها؟, إيه؟).
    - **Rule & Benchmark Updates**:

@@ -51,3 +51,23 @@ _Avoid_: Trigger phrase, prompt word, signal
 **Rhetorical Suffix**:
 A sentence-final particle (`ها؟`, `إيه؟`) the Sheikh uses as a teaching device to prompt class engagement, not as a genuine student-turn boundary. Excluded from Known Cue nomination by suffix filtering in the Diff Loop.
 _Avoid_: Excluded cue, blacklisted cue, suppressed phrase
+
+**Anchor Expiry**:
+Decay of a bolded Matn block's reference status after an extended stretch of commentary or a mid-lecture break, turning subsequent clause re-reads that resume explanation back into standalone primary anchors.
+_Avoid_: Distant bolding, page-distance rule, re-bold threshold
+
+**Attendee Anonymization**:
+Substitution of `فلان` for any live lecture participant's personal name across all grammatical positions while retaining titles, kunyas, classical textbook placeholders, and historical figures.
+_Avoid_: Student masking, vocative replacement, name redaction
+
+**Echoed Student Turn**:
+An inaudible attendee utterance whose words are inferred only because the Sheikh repeats them aloud with questioning or evaluative intonation.
+_Avoid_: Repeated student answer, guessed student turn
+
+**Seam Repetition**:
+A consecutive word repetition straddling the boundary between the final token of a book reading and the opening token of the Sheikh's immediate lexical gloss.
+_Avoid_: Boundary duplicate, split repetition
+
+**Compound Sharh-Matn**:
+A single bold block preserving an unvowelized commentator lead-in ending in بقوله، / في قوله، / قوله: flowing directly into a vowelized canonical Matn clause from <matn_source>, matched via prefix/tail seam splitting.
+_Avoid_: Sharh-to-Matn Continuity, compound blocks, hybrid Sharh-Matn

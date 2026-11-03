@@ -47,11 +47,64 @@ class TestDiffInlineMatn(unittest.TestCase):
 
     def test_format_matn_diff_report(self):
         ai_text = """<!-- fallback -->
-**(ففي مسند احمد)**"""
-        user_text = """**(فَفِي مُسْنَدِ أَحْمَدَ)**"""
-        diffs = classify_matn_diffs(ai_text, user_text)
+**(ففي مسند احمد)**
+
+**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**"""
+        user_text = """**(فَفِي مُسْنَدِ أَحْمَدَ)**
+
+**(كَلِمَتَانِ خَفِيفَتَانِ)**
+
+**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَةٌ)**
+
+**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**"""
+        diffs = classify_matn_diffs(
+            ai_text,
+            user_text,
+            matn_source="إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ",
+        )
         report = format_matn_diff_report(diffs)
-        self.assertIn("تصحيحات Fallback", report)
+        self.assertIn("تصحيحات Fallback (1)", report)
+        self.assertIn("متون شفهية عارضة / نقولات مستقلة (1)", report)
+        self.assertIn("أخطاء نسخ المتن الأصلي (1)", report)
+        self.assertIn("استعادة مرساة المتن بعد تباعد الشرح (Anchor Expiry) (1)", report)
+        self.assertEqual(report.count("الأصل المعالج:"), 2)
+
+    def test_full_hadith_plus_subclauses_and_anchor_expiry_reread_avoids_false_copy_errors(self):
+        self.assertEqual(MatnDiffCategory.ANCHOR_EXPIRY_REREAD.value, "anchor_expiry_reread")
+        self.assertFalse(hasattr(MatnDiffCategory, "DISTANT_REREAD_REBOLD"))
+
+        full_hadith = (
+            "عَنْ ابْنِ مَسْعُودٍ رَضِيَ اللَّهُ عَنْهُ قَالَ: فَقَالَ: "
+            "«أَتَرْضَوْنَ أَنْ تَكُونُوا رُبُعَ أَهْلِ الْجَنَّةِ؟» قُلْنَا: نَعَمْ"
+        )
+        ai_text = f"""**({full_hadith})**
+
+شرح أول.
+
+**(أَتَرْضَوْنَ أَنْ تَكُونُوا رُبُعَ أَهْلِ الْجَنَّةِ)**
+
+**(قُلْنَا: نَعَمْ)**
+"""
+        user_text = f"""**({full_hadith})**
+
+شرح أول.
+
+**(أَتَرْضَوْنَ أَنْ تَكُونُوا رُبُعَ أَهْلِ الْجَنَّةِ)**
+
+**(قُلْنَا: نَعَمْ)**
+
+شرح طويل جدا استمر أكثر من صفحة كاملة.
+
+**(أَتَرْضَوْنَ أَنْ تَكُونُوا رُبُعَ أَهْلِ الْجَنَّةِ)**
+"""
+        diffs = classify_matn_diffs(ai_text, user_text, matn_source=full_hadith)
+        copy_errors = [d for d in diffs if d.category == MatnDiffCategory.MATN_COPY_ERROR]
+        self.assertEqual(copy_errors, [])
+        expiry_diffs = [d for d in diffs if d.category == MatnDiffCategory.ANCHOR_EXPIRY_REREAD]
+        self.assertEqual(len(expiry_diffs), 1)
+        self.assertEqual(expiry_diffs[0].user_text, "أَتَرْضَوْنَ أَنْ تَكُونُوا رُبُعَ أَهْلِ الْجَنَّةِ")
+        report = format_matn_diff_report(diffs)
+        self.assertIn("Anchor Expiry", report)
 
 
 if __name__ == "__main__":
