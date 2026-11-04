@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sys
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -692,6 +693,23 @@ VOCATIVE_GRAMMATICAL_STOPWORDS = frozenset({
 })
 
 
+BASE_KINSHIP_NOUNS: frozenset[str] = frozenset({
+    "أخوكم", "اخوكم", "أخونا", "اخونا", "الأخ", "الاخ", "الأخت", "الاخت",
+})
+
+BASE_KUNYA_PREFIXES: frozenset[str] = frozenset({
+    "أبو", "ابو", "أبا", "ابا",
+})
+
+BASE_TITLE_PREFIXES: frozenset[str] = frozenset({
+    "شيخ", "الشيخ", "دكتور", "الدكتور",
+})
+
+BASE_EXEMPT_NAMES: frozenset[str] = frozenset({
+    "زيد", "عمرو", "بكر", "هند", "جحا", "إبراهيم",
+})
+
+
 def _is_vocative_grammatical_non_name(
     token: str,
     stopwords: frozenset[str] = VOCATIVE_GRAMMATICAL_STOPWORDS,
@@ -783,12 +801,17 @@ def load_attendee_anonymization_rules(
     exempt_names: set[str] = set()
 
     if not path.exists():
+        warnings.warn(
+            f"Dialect rules file not found at {path}; using baseline attendee anonymization rules.",
+            UserWarning,
+            stacklevel=2,
+        )
         return AttendeeAnonymizationRules(
             placeholder=placeholder,
-            kinship_nouns=frozenset(),
-            kunya_prefixes=frozenset(),
-            title_prefixes=frozenset(),
-            exempt_names=frozenset(),
+            kinship_nouns=BASE_KINSHIP_NOUNS,
+            kunya_prefixes=BASE_KUNYA_PREFIXES,
+            title_prefixes=BASE_TITLE_PREFIXES,
+            exempt_names=BASE_EXEMPT_NAMES,
             kinship_stopwords=KINSHIP_GRAMMATICAL_STOPWORDS,
             vocative_stopwords=VOCATIVE_GRAMMATICAL_STOPWORDS,
         )
@@ -825,6 +848,21 @@ def load_attendee_anonymization_rules(
         elif "Preserved Non-Attendee Names" in stripped:
             for grp in re.findall(r"\(([^)]+)\)", stripped):
                 exempt_names.update(re.findall(r"[\u0621-\u064A]+", grp))
+
+    if not kinship_nouns or not kunya_prefixes or not title_prefixes or not exempt_names:
+        warnings.warn(
+            f"Attendee anonymization rules parsed from {path} produced empty rule set(s); falling back to baseline rules.",
+            UserWarning,
+            stacklevel=2,
+        )
+        if not kinship_nouns:
+            kinship_nouns.update(BASE_KINSHIP_NOUNS)
+        if not kunya_prefixes:
+            kunya_prefixes.update(BASE_KUNYA_PREFIXES)
+        if not title_prefixes:
+            title_prefixes.update(BASE_TITLE_PREFIXES)
+        if not exempt_names:
+            exempt_names.update(BASE_EXEMPT_NAMES)
 
     return AttendeeAnonymizationRules(
         placeholder=placeholder,

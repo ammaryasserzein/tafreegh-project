@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
+import warnings
 import docx
 from docx.shared import Inches, Pt
 from docx.oxml import OxmlElement
@@ -16,6 +17,10 @@ sys.path.insert(0, str(scripts_dir))
 
 from export_docx import create_docx
 from verify_docx import (
+    BASE_EXEMPT_NAMES,
+    BASE_KINSHIP_NOUNS,
+    BASE_KUNYA_PREFIXES,
+    BASE_TITLE_PREFIXES,
     MatnAlignmentValidator,
     _verify_exported_matn_segment,
     verify_docx,
@@ -564,6 +569,39 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
         # Vocative custom stopword suppression
         self.assertTrue(default_rules.find_leaks("قول يا زميل"))
         self.assertEqual(custom_rules.find_leaks("قول يا زميل"), [])
+
+    def test_load_attendee_anonymization_rules_warns_and_falls_back_on_missing_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_path = Path(tmpdir) / "non_existent_rules.md"
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                rules = load_attendee_anonymization_rules(missing_path)
+                self.assertTrue(any(issubclass(w.category, UserWarning) for w in caught))
+                self.assertTrue(any("not found" in str(w.message) for w in caught))
+                self.assertEqual(rules.kinship_nouns, BASE_KINSHIP_NOUNS)
+                self.assertEqual(rules.kunya_prefixes, BASE_KUNYA_PREFIXES)
+                self.assertEqual(rules.title_prefixes, BASE_TITLE_PREFIXES)
+                self.assertEqual(rules.exempt_names, BASE_EXEMPT_NAMES)
+                # Leak detection still catches leaks instead of being disabled
+                self.assertTrue(rules.find_leaks("أخوكم معاذ بيسأل"))
+                self.assertTrue(rules.find_leaks("نعم يا معاذ؟"))
+
+    def test_load_attendee_anonymization_rules_warns_and_falls_back_on_empty_or_renamed_sections(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_rules_path = Path(tmpdir) / "renamed_dialect_rules.md"
+            bad_rules_path.write_text("# Rules without expected attendee headers\n", encoding="utf-8")
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                rules = load_attendee_anonymization_rules(bad_rules_path)
+                self.assertTrue(any(issubclass(w.category, UserWarning) for w in caught))
+                self.assertTrue(any("empty rule set" in str(w.message) for w in caught))
+                self.assertEqual(rules.kinship_nouns, BASE_KINSHIP_NOUNS)
+                self.assertEqual(rules.kunya_prefixes, BASE_KUNYA_PREFIXES)
+                self.assertEqual(rules.title_prefixes, BASE_TITLE_PREFIXES)
+                self.assertEqual(rules.exempt_names, BASE_EXEMPT_NAMES)
+                # Leak detection still catches leaks
+                self.assertTrue(rules.find_leaks("أخوكم معاذ بيسأل"))
+                self.assertTrue(rules.find_leaks("نعم يا معاذ؟"))
 
 
 class TestVerifyDocxCoverageAndFallbackMatn(unittest.TestCase):
