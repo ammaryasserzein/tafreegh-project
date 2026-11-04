@@ -52,6 +52,9 @@ DEFAULT_PROJECT_ROOT = Path(r"c:\Users\L\Documents\Tafreegh_Project")
 WORD_BASE_TEMPLATE = DEFAULT_PROJECT_ROOT / "Word base.docx"
 DEFAULT_FONT_NAME = "Traditional Arabic"
 DEFAULT_FONT_SIZE = 18
+DEFAULT_DIALECT_RULES_PATH = (
+    Path(__file__).resolve().parent.parent / "references" / "dialect-rules.md"
+)
 
 NOTEBOOKLM_HEADER_PATTERNS = [
     re.compile(r'^(?:المصادر|مصادر|المصدر|دليل المصدر|دليل مصادر)$', re.IGNORECASE),
@@ -458,14 +461,51 @@ def archive_processed_inputs(
     }
 
 
-DIALECT_MARKERS = {
+BASE_DIALECT_MARKERS: frozenset[str] = frozenset({
     "كدا", "كده", "ده", "دا", "دي", "ايه", "إيه", "ازاي", "ازاى", "احنا", "إحنا",
     "برضه", "برضو", "علطول", "أومال", "امال", "مش", "عشان", "علشان", "بقى",
     "مفيش", "مافيش", "مكانش", "ماكانش", "حد", "تاني", "قوي", "خالص", "يلا",
-    "طب", "طيب", "يعني", "حاجة", "بتاع", "بتوع", "اللي", "دلوقتي", "عاوز", "عايز", "عايزة",
+    "طب", "طيب", "يعني", "حاجة", "بتاع", "اللي", "دلوقتي", "عاوز", "عايز", "عايزة",
     "بيقول", "يقولوا", "شوية", "تلاقي", "طبعا", "أهو", "اهو", "يبقى", "ماشي", "بقول",
-    "ولواحد", "الفلوس", "اتسرق", "اتسرقت", "اتكسر", "اتعمل", "هشتري", "ملوش",
-}
+    "ولواحد",
+})
+
+
+def load_dialect_markers(rules_path: Path | str | None = None) -> set[str]:
+    """Dynamically loads colloquial markers from references/dialect-rules.md.
+
+    Parses markers from the 'Colloquial Lexicon & Verbal Markers' section of the SSOT.
+    Augments with BASE_DIALECT_MARKERS as fallback or baseline guarantee.
+    """
+    path = Path(rules_path) if rules_path else DEFAULT_DIALECT_RULES_PATH
+    markers: set[str] = set()
+
+    if path.exists():
+        text = path.read_text(encoding="utf-8")
+        in_section = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                if "Colloquial Lexicon" in stripped:
+                    in_section = True
+                    continue
+                elif in_section:
+                    break
+            if in_section:
+                for bold_token in re.findall(r"\*\*([^*]+)\*\*", stripped):
+                    if not re.search(r"[\u0600-\u06FF]", bold_token):
+                        continue
+                    for word in re.findall(r"\w+", bold_token):
+                        if re.search(r"[\u0600-\u06FF]", word):
+                            markers.add(word.strip())
+
+    if not markers:
+        return set(BASE_DIALECT_MARKERS)
+
+    return markers | set(BASE_DIALECT_MARKERS)
+
+
+DIALECT_MARKERS: set[str] = load_dialect_markers()
 
 
 def verify_isolated_segment(text: str) -> bool:

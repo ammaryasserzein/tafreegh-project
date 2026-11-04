@@ -44,6 +44,18 @@ When Egyptian dialect expressions occur in the speaker's explanation, normalize 
 - **Fused Negation Particles**: Single connected word: **مفيهوش**، **مالهاش**، **ملوش**، **مفيش**، **مكانوش**، **ميقفوش**.
 - **Compound Verb Negation**: Write ما + فعل + ش as separate particles: **ما جتش**، **ما حصلش**، **ما حدش**.
 
+## Colloquial Lexicon & Verbal Markers
+
+Colloquial markers, vocabulary, and verbal forms identifying non-classical commentary:
+
+- **Colloquial Particles & Vocabulary**: **كدا**، **كده**، **ده**، **دا**، **دي**، **ايه**، **إيه**، **ازاي**، **ازاى**، **احنا**، **إحنا**، **برضه**، **برضو**، **علطول**، **أومال**، **امال**، **مش**، **عشان**، **علشان**، **بقى**، **حد**، **تاني**، **قوي**، **خالص**، **يلا**، **طب**، **طيب**، **يعني**، **حاجة**، **بتاع**، **بتوع**، **اللي**، **دلوقتي**، **شوية**، **طبعا**، **أهو**، **اهو**، **يبقى**، **ماشي**، **ولواحد**، **الفلوس**.
+- **Colloquial Verbal Forms & Prefixes**:
+  - Present and continuous verbs with بـ: **بيقول**، **يقولوا**، **تلاقي**، **بقول**.
+  - Future verbs with prefix هـ: **هشتري**.
+  - Passive verbs with prefix اتـ: **اتسرق**، **اتسرقت**، **اتكسر**، **اتعمل**.
+  - Volitional particles: **عاوز**، **عايز**، **عايزة**.
+- **Colloquial Negation**: **مفيش**، **مافيش**، **مكانش**، **ماكانش**، **ملوش**.
+
 ## Laughter, Fillers, Repetitions & Affirmations
 
 - **Laughter**: Always record as ههههه.

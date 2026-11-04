@@ -29,6 +29,8 @@ from export_docx import (
     _extract_candidate_query,
     _format_segment_output,
     CANONICAL_SUBJECT_NAMES,
+    load_dialect_markers,
+    DIALECT_MARKERS,
 )
 from lecture_identity import (
     LectureIdentity,
@@ -823,6 +825,38 @@ class TestCanonicalRoutingSSOT(unittest.TestCase):
             self.assertEqual(routing.get("أصول"), "أصول الفقه")
             self.assertEqual(routing.get("ورقات"), "أصول الفقه")
             self.assertEqual(routing.get("أصول الفقه"), "أصول الفقه")
+
+
+class TestLoadDialectMarkers(unittest.TestCase):
+    def test_load_from_default_dialect_rules_ssot(self):
+        """Verify load_dialect_markers loads the 7 colloquial markers from dialect-rules.md SSOT."""
+        markers = load_dialect_markers()
+        seven_markers = {"بتوع", "الفلوس", "اتسرق", "اتسرقت", "اتكسر", "اتعمل", "هشتري"}
+        for marker in seven_markers:
+            self.assertIn(marker, markers)
+            self.assertIn(marker, DIALECT_MARKERS)
+        self.assertIn("ملوش", markers)
+        self.assertIn("ملوش", DIALECT_MARKERS)
+
+    def test_load_dialect_markers_custom_path(self):
+        """Verify custom markdown dialect rules can be loaded dynamically."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            custom_rules = Path(tmp_dir) / "dialect-rules.md"
+            custom_rules.write_text(
+                "## Colloquial Lexicon & Verbal Markers\n\n"
+                "- **علامة_جديدة**، **لفظ_عامي**\n",
+                encoding="utf-8",
+            )
+            markers = load_dialect_markers(custom_rules)
+            self.assertIn("علامة_جديدة", markers)
+            self.assertIn("لفظ_عامي", markers)
+
+    def test_load_dialect_markers_fallback_missing_file(self):
+        """Verify fallback to base markers when rules file does not exist."""
+        markers = load_dialect_markers(Path("non_existent_dialect_rules.md"))
+        self.assertIn("كدا", markers)
+        self.assertIn("مش", markers)
+        self.assertIsInstance(markers, set)
 
 
 
