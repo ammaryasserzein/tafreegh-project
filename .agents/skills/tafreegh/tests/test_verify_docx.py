@@ -16,6 +16,8 @@ sys.path.insert(0, str(scripts_dir))
 
 from export_docx import create_docx
 from verify_docx import (
+    MatnAlignmentValidator,
+    _verify_exported_matn_segment,
     verify_docx,
     Severity,
     load_dialect_replacements,
@@ -756,6 +758,86 @@ class TestVerifyDocxCLI(unittest.TestCase):
             data_bad = json.loads(proc_bad.stdout)
             self.assertFalse(data_bad["passed"])
             self.assertGreater(data_bad["error_count"], 0)
+
+
+
+class TestMatnAlignmentValidator(unittest.TestCase):
+    def setUp(self):
+        from matn_matcher import SequentialMatnMatcher
+        self.SequentialMatnMatcher = SequentialMatnMatcher
+        self.sample_source = (
+            "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ ... "
+            "الحَدُّ وَالمَوْضُوعُ ثُمَّ الثَّمَرَهْ ... "
+            "وَنِسْبَةٌ وَفَضْلُهُ وَالوَاضِعْ ... "
+            "وَالِاسْمُ الِاسْتِمْدَادُ حُكْمُ الشَّارِعْ ... "
+            "مَسَائِلُ وَالبَعْضُ بِالبَعْضِ اكْتَفَى ... "
+            "وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"
+        )
+
+    def test_matn_alignment_validator_does_not_mutate_matcher_cursor_state(self):
+        """Validating an exported segment via validator seam must not mutate matcher cursor or history."""
+        matcher = self.SequentialMatnMatcher(self.sample_source, forward_lookahead=500)
+        # Advance matcher cursor by matching first segment
+        res = matcher.match_segment("ان مبادئ كل علم عشره")
+        cursor_before = matcher.cursor
+        cursor_norm_before = matcher.cursor_norm
+        history_len_before = len(matcher.history)
+        active_pos_before = matcher._active_norm_pos
+
+        self.assertGreater(cursor_before, 0)
+
+        # Validate next segment using MatnAlignmentValidator with the matcher instance
+        validator = MatnAlignmentValidator(matcher)
+        is_valid = validator.verify_exported_segment("الحَدُّ وَالمَوْضُوعُ ثُمَّ الثَّمَرَهْ")
+        self.assertTrue(is_valid)
+
+        # Check matcher state was NOT mutated
+        self.assertEqual(matcher.cursor, cursor_before)
+        self.assertEqual(matcher.cursor_norm, cursor_norm_before)
+        self.assertEqual(len(matcher.history), history_len_before)
+        self.assertEqual(matcher._active_norm_pos, active_pos_before)
+
+        # Also verify via functional helper _verify_exported_matn_segment
+        is_valid_func = _verify_exported_matn_segment(
+            "الحَدُّ وَالمَوْضُوعُ ثُمَّ الثَّمَرَهْ",
+            matcher=matcher,
+            matn_source=self.sample_source,
+        )
+        self.assertTrue(is_valid_func)
+        self.assertEqual(matcher.cursor, cursor_before)
+        self.assertEqual(matcher.cursor_norm, cursor_norm_before)
+        self.assertEqual(len(matcher.history), history_len_before)
+        self.assertEqual(matcher._active_norm_pos, active_pos_before)
+
+    def test_matn_alignment_validator_verifies_primary_matn_verbatim(self):
+        validator = MatnAlignmentValidator(self.sample_source)
+        # Verbatim segment passes
+        self.assertTrue(validator.verify_exported_segment("إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ"))
+        # Corrupted segment fails
+        self.assertFalse(validator.verify_exported_segment("إِنَّ قَوَاعِدَ كُلِّ عِلْمٍ عَشَرَهْ"))
+
+    def test_matn_alignment_validator_compound_sharh_matn(self):
+        source = "فَقُلْنَا: اللَّهُ أَكْبَرُ! وَذَلِكَ أَنَّكُمْ فِي أَهْلِ الشِّرْكِ كَالشَّعْرَةِ الْبَيْضَاءِ"
+        validator = MatnAlignmentValidator(source)
+        # Valid compound Sharh-Matn with unvowelled Sharh prefix and vowelled Matn tail
+        self.assertTrue(validator.verify_exported_segment("ثم بين وجه ذلك بقوله، وَذَلِكَ"))
+        # Vowelled Sharh prefix is rejected
+        self.assertFalse(validator.verify_exported_segment("ثُمَّ بَيَّنَ وجه ذلك بقوله، وَذَلِكَ"))
+        # Corrupted Matn tail is rejected
+        self.assertFalse(validator.verify_exported_segment("ثم بين وجه ذلك بقوله، وَذَلِكُمْ"))
+
+    def test_matn_alignment_validator_fallback_unvowelled_and_citations(self):
+        validator = MatnAlignmentValidator(self.sample_source)
+        # Unvowelled fallback outside source passes
+        self.assertTrue(validator.verify_exported_segment("هذا كلام خارج المتن تماما"))
+        # Fallback with inner vowelled citation inside parentheses passes
+        self.assertTrue(validator.verify_exported_segment("قال تعالى: (أَوْ سُلَّمًا فِي السَّمَاءِ)"))
+        # Fallback with unverified bogus outer tashkeel is rejected
+        self.assertFalse(validator.verify_exported_segment("هَذَا كَلَامٌ خَارِجَ الْمَتْنِ"))
+
+    def test_verify_exported_matn_segment_helper_requires_source_or_matcher(self):
+        with self.assertRaises(ValueError):
+            _verify_exported_matn_segment("كلام")
 
 
 if __name__ == "__main__":

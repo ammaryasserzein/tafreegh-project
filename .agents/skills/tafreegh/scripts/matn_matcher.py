@@ -303,55 +303,6 @@ class SequentialMatnMatcher:
         # 4. Double-miss: Fallback Mode
         return self._create_fallback_result(spoken_segment)
 
-    def verify_exported_segment(self, exported_text: str) -> bool:
-        """Verifies an exported Matn block against canonical source using sequential cursor semantics."""
-        inner_collapsed = re.sub(r"\s+", " ", exported_text).strip()
-        if not inner_collapsed:
-            return True
-
-        res = self.match_segment(inner_collapsed)
-        res_collapsed = re.sub(r"\s+", " ", res.text).strip()
-
-        if res.mode == MatchMode.PRIMARY:
-            return inner_collapsed == res_collapsed or inner_collapsed in self._collapsed_source
-
-        if res.is_source_anchored:
-            if inner_collapsed == res_collapsed:
-                return True
-            comp_m = COMPOUND_SHARH_SPLIT_RE.match(inner_collapsed)
-            if not comp_m:
-                return False
-            orig_prefix, orig_tail = comp_m.group(1), comp_m.group(2).strip()
-            if strip_tashkeel_preserving_citations(orig_prefix) != orig_prefix:
-                return False
-            around = re.sub(
-                r"\s+",
-                " ",
-                self.source[max(0, res.start_pos - 4) : min(len(self.source), res.end_pos + 4)],
-            )
-            return bool(orig_tail and orig_tail in around)
-
-        # Unanchored Fallback
-        has_outer_tashkeel = strip_tashkeel_preserving_citations(inner_collapsed) != inner_collapsed
-        if has_outer_tashkeel:
-            # Allow long-jump verbatim Primary Matn quotes beyond forward_lookahead (non-compound)
-            if (
-                not COMPOUND_SHARH_SPLIT_RE.match(strip_tashkeel_preserving_citations(inner_collapsed))
-                and inner_collapsed in self._collapsed_source
-            ):
-                norm_q = normalize_arabic_search(inner_collapsed)
-                jump_idx = self.norm_source.find(norm_q, self.cursor_norm)
-                if jump_idx != -1:
-                    self.cursor_norm = jump_idx + len(norm_q)
-                    self.cursor = self.pos_map[self.cursor_norm - 1] + 1
-                return True
-            return False
-
-        norm_query = normalize_arabic_search(inner_collapsed)
-        if norm_query and norm_query in self.norm_source:
-            return inner_collapsed in self._collapsed_source
-        return True
-
     def resolve_sandwiched_fallbacks(self) -> None:
         """Identifies unanchored fallback segments bounded before and after by source-anchored matches."""
         first_anchored = next((i for i, h in enumerate(self.history) if h.is_source_anchored), None)

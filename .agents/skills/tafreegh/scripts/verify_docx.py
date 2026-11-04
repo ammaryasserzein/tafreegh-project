@@ -22,10 +22,13 @@ try:
         normalize_arabic,
     )
     from matn_matcher import (
+        COMPOUND_SHARH_SPLIT_RE,
+        MatchMode,
         SequentialMatnMatcher,
         TASHKEEL_REGEX,
         normalize_arabic_search,
         strip_tashkeel,
+        strip_tashkeel_preserving_citations,
     )
 except ImportError:
     from .export_docx import (
@@ -41,10 +44,13 @@ except ImportError:
         normalize_arabic,
     )
     from .matn_matcher import (
+        COMPOUND_SHARH_SPLIT_RE,
+        MatchMode,
         SequentialMatnMatcher,
         TASHKEEL_REGEX,
         normalize_arabic_search,
         strip_tashkeel,
+        strip_tashkeel_preserving_citations,
     )
 
 # Ensure UTF-8 output on Windows
@@ -998,6 +1004,96 @@ def _check_unbolded_fallback_matn(
                     )
 
 
+class MatnAlignmentValidator:
+    """Validator seam component verifying exported Matn blocks against canonical <matn_source> non-destructively."""
+
+    def __init__(self, matn_source: str | SequentialMatnMatcher):
+        if isinstance(matn_source, SequentialMatnMatcher):
+            self.source = matn_source.source
+        else:
+            self.source = matn_source
+        self._collapsed_source = re.sub(r"\s+", " ", self.source).strip()
+        # Internal sequential matcher isolated to this validator instance;
+        # will never mutate any external domain matcher passed in.
+        self._matcher = SequentialMatnMatcher(self.source)
+
+    @property
+    def cursor(self) -> int:
+        return self._matcher.cursor
+
+    @property
+    def cursor_norm(self) -> int:
+        return self._matcher.cursor_norm
+
+    def verify_exported_segment(self, exported_text: str) -> bool:
+        """Verifies an exported Matn block against canonical source using sequential cursor semantics."""
+        inner_collapsed = re.sub(r"\s+", " ", exported_text).strip()
+        if not inner_collapsed:
+            return True
+
+        res = self._matcher.match_segment(inner_collapsed)
+        res_collapsed = re.sub(r"\s+", " ", res.text).strip()
+
+        if res.mode == MatchMode.PRIMARY:
+            return inner_collapsed == res_collapsed or inner_collapsed in self._collapsed_source
+
+        if res.is_source_anchored:
+            if inner_collapsed == res_collapsed:
+                return True
+            comp_m = COMPOUND_SHARH_SPLIT_RE.match(inner_collapsed)
+            if not comp_m:
+                return False
+            orig_prefix, orig_tail = comp_m.group(1), comp_m.group(2).strip()
+            if strip_tashkeel_preserving_citations(orig_prefix) != orig_prefix:
+                return False
+            around = re.sub(
+                r"\s+",
+                " ",
+                self.source[max(0, res.start_pos - 4) : min(len(self.source), res.end_pos + 4)],
+            )
+            return bool(orig_tail and orig_tail in around)
+
+        # Unanchored Fallback
+        has_outer_tashkeel = strip_tashkeel_preserving_citations(inner_collapsed) != inner_collapsed
+        if has_outer_tashkeel:
+            # Allow long-jump verbatim Primary Matn quotes beyond forward_lookahead (non-compound)
+            if (
+                not COMPOUND_SHARH_SPLIT_RE.match(strip_tashkeel_preserving_citations(inner_collapsed))
+                and inner_collapsed in self._collapsed_source
+            ):
+                norm_q = normalize_arabic_search(inner_collapsed)
+                jump_idx = self._matcher.norm_source.find(norm_q, self._matcher.cursor_norm)
+                if jump_idx != -1:
+                    self._matcher.cursor_norm = jump_idx + len(norm_q)
+                    self._matcher.cursor = (
+                        self._matcher.pos_map[self._matcher.cursor_norm - 1] + 1
+                    )
+                return True
+            return False
+
+        norm_query = normalize_arabic_search(inner_collapsed)
+        if norm_query and norm_query in self._matcher.norm_source:
+            return inner_collapsed in self._collapsed_source
+        return True
+
+    def verify_segment(self, exported_text: str) -> bool:
+        """Alias for verify_exported_segment."""
+        return self.verify_exported_segment(exported_text)
+
+
+def _verify_exported_matn_segment(
+    exported_text: str,
+    matn_source: str | SequentialMatnMatcher | None = None,
+    matcher: SequentialMatnMatcher | None = None,
+) -> bool:
+    """Functional validator seam helper verifying an exported segment without mutating external matcher state."""
+    target = matcher if matcher is not None else matn_source
+    if target is None:
+        raise ValueError("Either matn_source or matcher must be provided")
+    validator = MatnAlignmentValidator(target)
+    return validator.verify_exported_segment(exported_text)
+
+
 def _check_matn_alignment(
     para_records: list[ParagraphRecord],
     matn_path: Path,
@@ -1007,14 +1103,14 @@ def _check_matn_alignment(
     if not matn_path.exists():
         return
     matn_source = read_matn_source_content(matn_path)
-    matcher = SequentialMatnMatcher(matn_source)
+    validator = MatnAlignmentValidator(matn_source)
 
     for rec in para_records:
         if not rec.is_matn:
             continue
         stripped = rec.text.strip()
         inner = stripped[1:-1].strip() if (stripped.startswith("(") and stripped.endswith(")")) else stripped
-        if not matcher.verify_exported_segment(inner):
+        if not validator.verify_exported_segment(inner):
             inner_collapsed = re.sub(r"\s+", " ", inner).strip()
             _flag(
                 report,

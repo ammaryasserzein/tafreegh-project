@@ -283,5 +283,11 @@ class TestMatnMatcher(unittest.TestCase):
         self.assertEqual(comp.text, "ثم بين وجه ذلك بقوله، وَذَلِكَ")
 
 
+    def test_sequential_matn_matcher_does_not_expose_verify_exported_segment(self):
+        """SequentialMatnMatcher is a generation pipeline engine; validation heuristics belong in verify_docx (CODING_STANDARDS § 6)."""
+        self.assertFalse(hasattr(self.matcher, "verify_exported_segment"))
+        self.assertFalse(hasattr(SequentialMatnMatcher, "verify_exported_segment"))
+
+
 if __name__ == "__main__":
     unittest.main()
