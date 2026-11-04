@@ -570,6 +570,112 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
         self.assertTrue(default_rules.find_leaks("قول يا زميل"))
         self.assertEqual(custom_rules.find_leaks("قول يا زميل"), [])
 
+    def test_flags_bare_vocatives_and_classroom_illustrations_for_known_attendees(self):
+        rules = load_attendee_anonymization_rules()
+        self.assertTrue({"معاذ", "طارق", "سارة"}.issubset(rules.known_attendee_names))
+
+        # 1. Bare vocatives without conversational triggers must leak for known attendees
+        bare_vocative_leaks = [
+            "يا معاذ",
+            "يا معاذ اسمع",
+            "يا طارق",
+            "يا سارة",
+            "ويا معاذ",
+        ]
+        for phrase in bare_vocative_leaks:
+            with self.subTest(phrase=phrase):
+                leaks = rules.find_leaks(phrase)
+                self.assertTrue(leaks, f"Expected bare vocative leak for: {phrase}")
+                self.assertEqual(leaks[0][0], "vocative")
+
+        # 2. Classroom illustrations & third-person references must leak for known attendees
+        illustration_leaks = [
+            "معاذ بيعمل إيه دلوقتي؟",
+            "طارق بيسأل عن المسألة",
+            "سارة بتسأل سؤالًا",
+            "زي ما قال معاذ",
+            "يعني لما نقول مثلا: معاذ بيعمل إيه دلوقتي؟",
+        ]
+        for phrase in illustration_leaks:
+            with self.subTest(phrase=phrase):
+                leaks = rules.find_leaks(phrase)
+                self.assertTrue(leaks, f"Expected illustration leak for: {phrase}")
+                self.assertEqual(leaks[0][0], "reference")
+
+        # 3. Anonymized equivalents must cleanly pass without leaks
+        clean_anonymized = [
+            "يا فلان",
+            "يا فلان اسمع",
+            "فلان بيعمل إيه دلوقتي؟",
+            "زي ما قال فلان",
+            "يعني لما نقول مثلا: فلان بيعمل إيه دلوقتي؟",
+        ]
+        for phrase in clean_anonymized:
+            with self.subTest(phrase=phrase):
+                self.assertEqual(rules.find_leaks(phrase), [])
+
+        # 4. Classical/historical vocatives without triggers must cleanly pass
+        classical_vocatives = [
+            "يا عائشة",
+            "يا موسى",
+            "فقال: يا عائشة",
+            "وقال: يا موسى",
+        ]
+        for phrase in classical_vocatives:
+            with self.subTest(phrase=phrase):
+                self.assertEqual(rules.find_leaks(phrase), [])
+
+        # 5. Custom known_attendee_names override
+        custom_known_rules = AttendeeAnonymizationRules(
+            placeholder="فلان",
+            kinship_nouns=frozenset({"أخوكم"}),
+            kunya_prefixes=frozenset({"أبو"}),
+            title_prefixes=frozenset({"الشيخ"}),
+            exempt_names=frozenset(),
+            known_attendee_names=frozenset({"سلمان"}),
+        )
+        self.assertTrue(custom_known_rules.find_leaks("يا سلمان"))
+        self.assertTrue(custom_known_rules.find_leaks("سلمان بيعمل إيه"))
+        self.assertEqual(custom_known_rules.find_leaks("يا معاذ"), [])
+
+    def test_loads_known_attendee_names_from_dialect_rules_md(self):
+        custom_rules_md = """# Egyptian Colloquial Normalization Dictionary
+
+## Attendee Anonymization (فلان)
+
+- **Preserved Titles & Kunyas**: Retain prefixes before **فلان**: أخوكم فلان، أبو فلان، الشيخ فلان.
+- **Preserved Non-Attendee Names**: Retain placeholders (زيد).
+- **Known Attendee Names**: Custom attendees (سلمان، بلال).
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            rules_path = Path(tmpdir) / "custom_known.md"
+            rules_path.write_text(custom_rules_md, encoding="utf-8")
+            rules = load_attendee_anonymization_rules(rules_path)
+            self.assertEqual(rules.known_attendee_names, frozenset({"سلمان", "بلال"}))
+            self.assertTrue(rules.find_leaks("يا سلمان"))
+            self.assertTrue(rules.find_leaks("بلال بيعمل إيه"))
+            self.assertEqual(rules.find_leaks("يا معاذ"), [])
+
+    def test_docx_flags_bare_vocatives_and_illustrations_end_to_end(self):
+        doc_md = """بسم الله الرحمن الرحيم
+المادة: الفقه (عمدة السالك)
+2026-10-25
+
+يا معاذ اسمع هذا الشرح جيدًا.
+
+معاذ بيعمل إيه دلوقتي في هذه الحالة؟
+
+يا فلان، وفلان بيعمل إيه دلوقتي؟
+
+فقال: يا عائشة، وقال: يا موسى، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "bare_voc_and_illustrations.docx"
+            create_docx(doc_md, docx_path)
+            rep = verify_docx(docx_path)
+            leak_paras = [i.paragraph_index for i in rep.issues if i.code == "ATTENDEE_NAME_UNANONYMIZED"]
+            self.assertEqual(leak_paras, [3, 4])
+
     def test_load_attendee_anonymization_rules_warns_and_falls_back_on_missing_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             missing_path = Path(tmpdir) / "non_existent_rules.md"

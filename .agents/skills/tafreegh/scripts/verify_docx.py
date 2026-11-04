@@ -705,6 +705,16 @@ BASE_TITLE_PREFIXES: frozenset[str] = frozenset({
     "شيخ", "الشيخ", "دكتور", "الدكتور",
 })
 
+BASE_KNOWN_ATTENDEE_NAMES: frozenset[str] = frozenset({
+    "معاذ", "طارق", "سارة",
+})
+
+ILLUSTRATION_ACTIONS = (
+    r"(?:ب?[يت]عمل|ب?[يت]سأل|ب?[يت]قول|قال[ت]?|عايز[ةه]?|عاوز[ةه]?|"
+    r"قاعد[ةه]?|واقف[ةه]?|نايم[ةه]?|جه|جا[تت]|راح[ت]?|شايف[ةه]?|سامع[ةه]?)"
+)
+
+
 BASE_EXEMPT_NAMES: frozenset[str] = frozenset({
     "زيد", "عمرو", "بكر", "هند", "جحا", "إبراهيم",
 })
@@ -735,11 +745,15 @@ class AttendeeAnonymizationRules:
         default_factory=lambda: VOCATIVE_GRAMMATICAL_STOPWORDS
     )
 
+    known_attendee_names: frozenset[str] = field(
+        default_factory=lambda: BASE_KNOWN_ATTENDEE_NAMES
+    )
+
     def is_vocative_non_name(self, token: str) -> bool:
         return _is_vocative_grammatical_non_name(token, self.vocative_stopwords)
 
     def find_leaks(self, text: str) -> list[tuple[str, str]]:
-        """Scans stripped prose for unanonymized kinship and classroom vocative attendee references."""
+        """Scans stripped prose for unanonymized kinship, classroom vocative, and illustration attendee references."""
         all_prefixes = sorted(self.kunya_prefixes | self.title_prefixes, key=len, reverse=True)
         prefix_alt = "|".join(re.escape(p) for p in all_prefixes)
         kinship_alt = "|".join(
@@ -749,6 +763,11 @@ class AttendeeAnonymizationRules:
         voc_prefix_group = rf"(?:(?P<prefix>{prefix_alt})\s+)?" if prefix_alt else ""
 
         leaks: list[tuple[str, str]] = []
+        matched_spans: list[tuple[int, int]] = []
+
+        def _overlaps(start: int, end: int) -> bool:
+            return any(max(start, s) < min(end, e) for s, e in matched_spans)
+
         if kinship_alt:
             kinship_re = re.compile(
                 rf"(?<!\w)[وف]?(?:{kinship_alt})\s+(?P<prefixes>{prefix_group})(?P<cand>[\u0621-\u064A]{{3,}})(?!\w)"
@@ -761,6 +780,7 @@ class AttendeeAnonymizationRules:
                     continue
                 if not has_kunya and (cand in self.exempt_names or cand in self.kinship_stopwords):
                     continue
+                matched_spans.append((m_kin.start(), m_kin.end()))
                 leaks.append(("reference", m_kin.group(0)))
 
         vocative_re = re.compile(
@@ -780,11 +800,52 @@ class AttendeeAnonymizationRules:
                     rf"(?<!\w)(?:[وفبكل]?ال|[وفبكل])?{re.escape(cand)}(?!\w)", pre_window
                 ):
                     continue
-                leaks.append(("vocative", m_voc.group(0)))
+                if not _overlaps(m_voc.start(), m_voc.end()):
+                    matched_spans.append((m_voc.start(), m_voc.end()))
+                    leaks.append(("vocative", m_voc.group(0)))
                 continue
             if cand in self.exempt_names or cand in self.title_prefixes or self.is_vocative_non_name(cand):
                 continue
-            leaks.append(("vocative", m_voc.group(0)))
+            if not _overlaps(m_voc.start(), m_voc.end()):
+                matched_spans.append((m_voc.start(), m_voc.end()))
+                leaks.append(("vocative", m_voc.group(0)))
+
+        cand_names = sorted(
+            [n for n in self.known_attendee_names if n != self.placeholder and n not in self.exempt_names],
+            key=len,
+            reverse=True,
+        )
+        if cand_names:
+            cand_alt = "|".join(re.escape(n) for n in cand_names)
+
+            # Bare vocatives without conversational triggers for known attendees
+            bare_voc_re = re.compile(
+                rf"(?<!\w)[وف]?يا\s+{prefix_group}(?P<cand>{cand_alt})(?!\w)"
+            )
+            for m_bvoc in bare_voc_re.finditer(text):
+                if _overlaps(m_bvoc.start(), m_bvoc.end()):
+                    continue
+                matched_spans.append((m_bvoc.start(), m_bvoc.end()))
+                leaks.append(("vocative", m_bvoc.group(0)))
+
+            # Classroom illustrations & third-person references for known attendees
+            illustration_patterns = [
+                re.compile(
+                    rf"(?<!\w){prefix_group}(?P<cand>{cand_alt})\s+{ILLUSTRATION_ACTIONS}(?!\w)"
+                ),
+                re.compile(
+                    rf"(?<!\w)(?:مثل[اً]?|زي)\s*:\s*{prefix_group}(?P<cand>{cand_alt})(?!\w)"
+                ),
+                re.compile(
+                    rf"(?<!\w)زي\s+ما\s+(?:قال[ت]?|ب?[يت]قول)\s+{prefix_group}(?P<cand>{cand_alt})(?!\w)"
+                ),
+            ]
+            for pat in illustration_patterns:
+                for m_ill in pat.finditer(text):
+                    if _overlaps(m_ill.start(), m_ill.end()):
+                        continue
+                    matched_spans.append((m_ill.start(), m_ill.end()))
+                    leaks.append(("reference", m_ill.group(0)))
 
         return leaks
 
@@ -792,13 +853,14 @@ class AttendeeAnonymizationRules:
 def load_attendee_anonymization_rules(
     rules_path: Path | str | None = None,
 ) -> AttendeeAnonymizationRules:
-    """Dynamically parses Attendee Anonymization SSOT (exempt names, titles, kunyas) from references/dialect-rules.md."""
+    """Dynamically parses Attendee Anonymization SSOT (exempt names, titles, kunyas, known attendees) from references/dialect-rules.md."""
     path = Path(rules_path) if rules_path else DEFAULT_DIALECT_RULES_PATH
     placeholder = "فلان"
     kinship_nouns: set[str] = set()
     kunya_prefixes: set[str] = set()
     title_prefixes: set[str] = set()
     exempt_names: set[str] = set()
+    known_attendee_names: set[str] = set(BASE_KNOWN_ATTENDEE_NAMES)
 
     if not path.exists():
         warnings.warn(
@@ -814,6 +876,7 @@ def load_attendee_anonymization_rules(
             exempt_names=BASE_EXEMPT_NAMES,
             kinship_stopwords=KINSHIP_GRAMMATICAL_STOPWORDS,
             vocative_stopwords=VOCATIVE_GRAMMATICAL_STOPWORDS,
+            known_attendee_names=BASE_KNOWN_ATTENDEE_NAMES,
         )
 
     text = path.read_text(encoding="utf-8")
@@ -848,6 +911,12 @@ def load_attendee_anonymization_rules(
         elif "Preserved Non-Attendee Names" in stripped:
             for grp in re.findall(r"\(([^)]+)\)", stripped):
                 exempt_names.update(re.findall(r"[\u0621-\u064A]+", grp))
+        elif "Known Attendee Names" in stripped:
+            parsed_known: set[str] = set()
+            for grp in re.findall(r"\(([^)]+)\)", stripped):
+                parsed_known.update(re.findall(r"[\u0621-\u064A]+", grp))
+            if parsed_known:
+                known_attendee_names = parsed_known
 
     if not kinship_nouns or not kunya_prefixes or not title_prefixes or not exempt_names:
         warnings.warn(
@@ -872,6 +941,7 @@ def load_attendee_anonymization_rules(
         exempt_names=frozenset(exempt_names),
         kinship_stopwords=KINSHIP_GRAMMATICAL_STOPWORDS,
         vocative_stopwords=VOCATIVE_GRAMMATICAL_STOPWORDS,
+        known_attendee_names=frozenset(known_attendee_names),
     )
 
 
