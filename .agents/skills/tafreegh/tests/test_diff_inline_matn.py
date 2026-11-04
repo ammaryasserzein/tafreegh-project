@@ -106,6 +106,54 @@ class TestDiffInlineMatn(unittest.TestCase):
         report = format_matn_diff_report(diffs)
         self.assertIn("Anchor Expiry", report)
 
+    def test_anchor_expiry_reread_with_edited_tashkeel_captures_both_diffs(self):
+        ai_text = """**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**
+
+شرح أول مستفيض للمبادئ العشرة."""
+        user_text = """**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**
+
+شرح أول مستفيض للمبادئ العشرة يستمر لصفحات.
+
+**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَةٌ)**"""
+        matn_source = "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ"
+
+        diffs = classify_matn_diffs(ai_text, user_text, matn_source=matn_source)
+        copy_errors = [d for d in diffs if d.category == MatnDiffCategory.MATN_COPY_ERROR]
+        expiry_diffs = [d for d in diffs if d.category == MatnDiffCategory.ANCHOR_EXPIRY_REREAD]
+
+        self.assertEqual(len(copy_errors), 1)
+        self.assertEqual(copy_errors[0].user_text, "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَةٌ")
+        self.assertEqual(copy_errors[0].ai_text, "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ")
+        self.assertEqual(len(expiry_diffs), 1)
+        self.assertEqual(expiry_diffs[0].user_text, "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَةٌ")
+
+    def test_immediate_adjacent_duplicate_not_labeled_anchor_expiry(self):
+        ai_text = """**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**"""
+        user_text = """**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**
+**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**"""
+        matn_source = "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ"
+
+        diffs = classify_matn_diffs(ai_text, user_text, matn_source=matn_source)
+        expiry_diffs = [d for d in diffs if d.category == MatnDiffCategory.ANCHOR_EXPIRY_REREAD]
+        self.assertEqual(len(expiry_diffs), 0)
+
+    def test_anchor_expiry_reread_in_fallback_mode_captures_fallback_correction(self):
+        ai_text = """<!-- fallback -->
+**(ففي مسند احمد)**
+
+شرح مطول جدا."""
+        user_text = """<!-- fallback -->
+**(ففي مسند احمد)**
+
+شرح مطول جدا يستمر طويلا.
+
+**(فَفِي مُسْنَدِ أَحْمَدَ)**"""
+        diffs = classify_matn_diffs(ai_text, user_text)
+        fb_diffs = [d for d in diffs if d.category == MatnDiffCategory.FALLBACK_CORRECTION]
+        expiry_diffs = [d for d in diffs if d.category == MatnDiffCategory.ANCHOR_EXPIRY_REREAD]
+        self.assertEqual(len(fb_diffs), 1)
+        self.assertEqual(len(expiry_diffs), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

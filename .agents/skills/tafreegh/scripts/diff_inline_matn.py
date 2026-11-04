@@ -163,10 +163,14 @@ def classify_matn_diffs(
     unmatched_user: list[tuple[str, ExtractedMatn]] = []
 
     # Pass 1: Exact normalized match (consumes matched AI occurrences in order)
+    last_user_by_norm: dict[str, ExtractedMatn] = {}
     for u_seg in user_segments:
         u_norm = normalize_arabic_search(u_seg.text)
         if not u_norm:
             continue
+
+        prev_u = last_user_by_norm.get(u_norm)
+        last_user_by_norm[u_norm] = u_seg
 
         if u_norm in ai_by_norm:
             avail_idx = next((idx for idx in ai_by_norm[u_norm] if idx not in consumed_ai), None)
@@ -178,14 +182,28 @@ def classify_matn_diffs(
                     diff_items.append(edit_diff)
             else:
                 prev_ai = ai_entries[ai_by_norm[u_norm][-1]][1]
-                diff_items.append(MatnDiffItem(
-                    line_number=u_seg.line_number,
-                    category=MatnDiffCategory.ANCHOR_EXPIRY_REREAD,
-                    user_text=u_seg.text,
-                    ai_text=prev_ai.text,
-                    context=u_seg.context,
-                    description="إعادة إبراز مقطع متن كمرساة مستقلة بعد انقضاء المرساة السابقة (Anchor Expiry)",
-                ))
+                edit_diff = _build_text_edit_diff(u_seg, prev_ai, is_fallback=prev_ai.is_fallback)
+                if edit_diff is not None:
+                    diff_items.append(edit_diff)
+
+                is_distant_from_ai = (
+                    u_seg.line_number > prev_ai.line_number + 1
+                    or (u_seg.context != prev_ai.context and u_seg.line_number != prev_ai.line_number)
+                )
+                is_distant_from_user = (
+                    prev_u is None
+                    or u_seg.line_number > prev_u.line_number + 1
+                    or (u_seg.context != prev_u.context and u_seg.line_number != prev_u.line_number)
+                )
+                if is_distant_from_ai and is_distant_from_user:
+                    diff_items.append(MatnDiffItem(
+                        line_number=u_seg.line_number,
+                        category=MatnDiffCategory.ANCHOR_EXPIRY_REREAD,
+                        user_text=u_seg.text,
+                        ai_text=prev_ai.text,
+                        context=u_seg.context,
+                        description="إعادة إبراز مقطع متن كمرساة مستقلة بعد انقضاء المرساة السابقة (Anchor Expiry)",
+                    ))
         else:
             unmatched_user.append((u_norm, u_seg))
 
