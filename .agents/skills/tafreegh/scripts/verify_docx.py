@@ -819,11 +819,17 @@ class AttendeeAnonymizationRules:
             cand_alt = "|".join(re.escape(n) for n in cand_names)
 
             # Bare vocatives without conversational triggers for known attendees
+            quote_spans = [(m.start(), m.end()) for m in re.finditer(r'«[^»]*»|"[^"]*"', text)]
             bare_voc_re = re.compile(
-                rf"(?<!\w)[وف]?يا\s+{prefix_group}(?P<cand>{cand_alt})(?!\w)"
+                rf"(?<!\w)[وف]?(?:يا|يَا)\s+{prefix_group}(?P<cand>{cand_alt})(?!\w)"
             )
             for m_bvoc in bare_voc_re.finditer(text):
                 if _overlaps(m_bvoc.start(), m_bvoc.end()):
+                    continue
+                if any(qs <= m_bvoc.start() and m_bvoc.end() <= qe for qs, qe in quote_spans):
+                    continue
+                tail_stripped = strip_tashkeel(text[m_bvoc.end():])
+                if re.match(r"^\s*(?:بن|ابن)\s+[\u0621-\u064A]{2,}", tail_stripped):
                     continue
                 matched_spans.append((m_bvoc.start(), m_bvoc.end()))
                 leaks.append(("vocative", m_bvoc.group(0)))

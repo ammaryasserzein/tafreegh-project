@@ -638,6 +638,38 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
         self.assertTrue(custom_known_rules.find_leaks("سلمان بيعمل إيه"))
         self.assertEqual(custom_known_rules.find_leaks("يا معاذ"), [])
 
+    def test_companion_hadith_vocatives_and_patronymics_exempt_from_bare_vocative_leaks(self):
+        rules = load_attendee_anonymization_rules()
+        self.assertIn("معاذ", rules.known_attendee_names)
+
+        pass_cases = [
+            "«يَا مُعَاذُ، أَتَدْرِي مَا حَقُّ اللَّهِ عَلَى الْعِبَادِ»",
+            '"يا معاذ"',
+            "قال النبي ﷺ: يا معاذ بن جبل",
+            "يا معاذَ بنَ جبلٍ",
+        ]
+        for phrase in pass_cases:
+            with self.subTest(phrase=phrase):
+                self.assertEqual(
+                    rules.find_leaks(phrase),
+                    [],
+                    f"Expected zero leaks for companion citation: {phrase}",
+                )
+
+        flag_cases = [
+            "نعم يا معاذ",
+            "يا معاذ تعالى",
+            "يا معاذ داخل جملة وقال: «مرحبا»",
+        ]
+        for phrase in flag_cases:
+            with self.subTest(phrase=phrase):
+                leaks = rules.find_leaks(phrase)
+                self.assertTrue(
+                    leaks,
+                    f"Expected vocative leak for classroom phrase: {phrase}",
+                )
+                self.assertEqual(leaks[0][0], "vocative")
+
     def test_loads_known_attendee_names_from_dialect_rules_md(self):
         custom_rules_md = """# Egyptian Colloquial Normalization Dictionary
 
