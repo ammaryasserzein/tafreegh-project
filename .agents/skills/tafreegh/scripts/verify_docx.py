@@ -692,8 +692,11 @@ VOCATIVE_GRAMMATICAL_STOPWORDS = frozenset({
 })
 
 
-def _is_vocative_grammatical_non_name(token: str) -> bool:
-    if token in VOCATIVE_GRAMMATICAL_STOPWORDS:
+def _is_vocative_grammatical_non_name(
+    token: str,
+    stopwords: frozenset[str] = VOCATIVE_GRAMMATICAL_STOPWORDS,
+) -> bool:
+    if token in stopwords:
         return True
     if token.endswith(("وك", "ها", "هم", "كم")):
         return True
@@ -707,6 +710,15 @@ class AttendeeAnonymizationRules:
     kunya_prefixes: frozenset[str]
     title_prefixes: frozenset[str]
     exempt_names: frozenset[str]
+    kinship_stopwords: frozenset[str] = field(
+        default_factory=lambda: KINSHIP_GRAMMATICAL_STOPWORDS
+    )
+    vocative_stopwords: frozenset[str] = field(
+        default_factory=lambda: VOCATIVE_GRAMMATICAL_STOPWORDS
+    )
+
+    def is_vocative_non_name(self, token: str) -> bool:
+        return _is_vocative_grammatical_non_name(token, self.vocative_stopwords)
 
     def find_leaks(self, text: str) -> list[tuple[str, str]]:
         """Scans stripped prose for unanonymized kinship and classroom vocative attendee references."""
@@ -729,7 +741,7 @@ class AttendeeAnonymizationRules:
                 has_kunya = any(p in self.kunya_prefixes for p in prefix_tokens)
                 if cand == self.placeholder:
                     continue
-                if not has_kunya and (cand in self.exempt_names or cand in KINSHIP_GRAMMATICAL_STOPWORDS):
+                if not has_kunya and (cand in self.exempt_names or cand in self.kinship_stopwords):
                     continue
                 leaks.append(("reference", m_kin.group(0)))
 
@@ -752,7 +764,7 @@ class AttendeeAnonymizationRules:
                     continue
                 leaks.append(("vocative", m_voc.group(0)))
                 continue
-            if cand in self.exempt_names or cand in self.title_prefixes or _is_vocative_grammatical_non_name(cand):
+            if cand in self.exempt_names or cand in self.title_prefixes or self.is_vocative_non_name(cand):
                 continue
             leaks.append(("vocative", m_voc.group(0)))
 
@@ -777,6 +789,8 @@ def load_attendee_anonymization_rules(
             kunya_prefixes=frozenset(),
             title_prefixes=frozenset(),
             exempt_names=frozenset(),
+            kinship_stopwords=KINSHIP_GRAMMATICAL_STOPWORDS,
+            vocative_stopwords=VOCATIVE_GRAMMATICAL_STOPWORDS,
         )
 
     text = path.read_text(encoding="utf-8")
@@ -818,6 +832,8 @@ def load_attendee_anonymization_rules(
         kunya_prefixes=frozenset(kunya_prefixes),
         title_prefixes=frozenset(title_prefixes),
         exempt_names=frozenset(exempt_names),
+        kinship_stopwords=KINSHIP_GRAMMATICAL_STOPWORDS,
+        vocative_stopwords=VOCATIVE_GRAMMATICAL_STOPWORDS,
     )
 
 

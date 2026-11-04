@@ -22,6 +22,7 @@ from verify_docx import (
     Severity,
     load_dialect_replacements,
     load_attendee_anonymization_rules,
+    AttendeeAnonymizationRules,
 )
 
 
@@ -528,6 +529,41 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
             rep = verify_docx(docx_path)
             leak_paras = [i.paragraph_index for i in rep.issues if i.code == "ATTENDEE_NAME_UNANONYMIZED"]
             self.assertEqual(leak_paras, [3, 4, 5])
+
+    def test_attendee_anonymization_rules_encapsulates_customizable_stopwords(self):
+        rules = load_attendee_anonymization_rules()
+        self.assertTrue(hasattr(rules, "kinship_stopwords"))
+        self.assertTrue(hasattr(rules, "vocative_stopwords"))
+        self.assertIn("الصعيدي", rules.kinship_stopwords)
+        self.assertIn("سيدي", rules.vocative_stopwords)
+
+        # Custom stopwords allow extending or overriding leak suppression per instance
+        custom_kinship = rules.kinship_stopwords | {"معين"}
+        custom_vocative = rules.vocative_stopwords | {"زميل"}
+        custom_rules = AttendeeAnonymizationRules(
+            placeholder="فلان",
+            kinship_nouns=frozenset({"أخوكم", "الأخ"}),
+            kunya_prefixes=frozenset({"أبو"}),
+            title_prefixes=frozenset({"الشيخ"}),
+            exempt_names=frozenset(),
+            kinship_stopwords=custom_kinship,
+            vocative_stopwords=custom_vocative,
+        )
+
+        # Without custom stopwords, "الأخ معين" leaks; with custom stopword, it's suppressed
+        default_rules = AttendeeAnonymizationRules(
+            placeholder="فلان",
+            kinship_nouns=frozenset({"أخوكم", "الأخ"}),
+            kunya_prefixes=frozenset({"أبو"}),
+            title_prefixes=frozenset({"الشيخ"}),
+            exempt_names=frozenset(),
+        )
+        self.assertTrue(default_rules.find_leaks("الأخ معين سأل"))
+        self.assertEqual(custom_rules.find_leaks("الأخ معين سأل"), [])
+
+        # Vocative custom stopword suppression
+        self.assertTrue(default_rules.find_leaks("قول يا زميل"))
+        self.assertEqual(custom_rules.find_leaks("قول يا زميل"), [])
 
 
 class TestVerifyDocxCoverageAndFallbackMatn(unittest.TestCase):
