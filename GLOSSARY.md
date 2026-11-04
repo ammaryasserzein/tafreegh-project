@@ -13,11 +13,11 @@ A per-lecture Markdown file containing the exact vowelized canonical text the sh
 _Avoid_: Reference text, source file, book file
 
 **Primary Mode**:
-Matn matching mode that uses a `<matn_source>` file as absolute authority. Identified passages are replaced with the source's exact text including full tashkeel.
+Matn matching mode that uses a Matn Source file as absolute authority. Identified passages are replaced with the source's exact text including full tashkeel.
 _Avoid_: Standard Mode, Branch A, normal mode
 
 **Fallback Mode**:
-Matn matching mode used when no `<matn_source>` is available. Reading boundaries are detected via linguistic cues (fusha vs colloquial shift). Matn is transcribed without tashkeel.
+Matn matching mode used when no Matn Source is available. Reading boundaries are detected via linguistic cues (fusha vs colloquial shift). Matn is transcribed without tashkeel.
 _Avoid_: Single-input mode, Branch B, no-matn mode
 
 **Dynamic Fallback Interleaving**:
@@ -69,5 +69,5 @@ A consecutive word repetition straddling the boundary between the final token of
 _Avoid_: Boundary duplicate, split repetition
 
 **Compound Sharh-Matn**:
-A single bold block preserving an unvowelized commentator lead-in ending in بقوله، / في قوله، / قوله: flowing directly into a vowelized canonical Matn clause from <matn_source>, matched via prefix/tail seam splitting.
+A single bold block preserving an unvowelized commentator lead-in ending in بقوله، / في قوله، / قوله: flowing directly into a vowelized canonical Matn clause from the primary text.
 _Avoid_: Sharh-to-Matn Continuity, compound blocks, hybrid Sharh-Matn

@@ -150,3 +150,11 @@ def test_count_open_deferred_reviews(tmp_path):
     assert verify_repo.count_open_deferred_reviews(base_dir=tmp_path) == 2
 
 
+def test_glossary_domain_language_purity():
+    glossary_path = REPO_ROOT / "GLOSSARY.md"
+    assert glossary_path.is_file(), "GLOSSARY.md must exist in repo root"
+    content = glossary_path.read_text(encoding="utf-8")
+    assert "<matn_source>" not in content, "GLOSSARY.md must not contain implementation detail '<matn_source>'"
+    assert "seam splitting" not in content, "GLOSSARY.md must not contain implementation detail 'seam splitting'"
+
+
