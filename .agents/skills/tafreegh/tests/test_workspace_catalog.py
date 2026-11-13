@@ -15,6 +15,7 @@ from tafreegh.workspace_catalog import (
     CanonicalCourseEntry,
     RuleCatalog,
     WorkspaceConfig,
+    resolve_runtime_context,
 )
 
 
@@ -239,7 +240,7 @@ class TestRuleCatalogDialectAndAnonymization:
             catalog = RuleCatalog.load(dialect_rules_path=custom_dialect)
 
         assert caught == []
-        assert {"علامة_جديدة", "لفظ_عامي", "كدا"}.issubset(catalog.dialect_markers)
+        assert catalog.dialect_markers == frozenset({"علامة_جديدة", "لفظ_عامي"})
 
         targets = {target for _, target in catalog.dialect_replacements}
         assert {"كدا", "مفيهوش", "ملوش", "ما جتش", "ما حدش"}.issubset(targets)
@@ -396,5 +397,62 @@ assert recorded == [], f"Unexpected import-time filesystem I/O: {recorded}"
             "RAW_INPUTS_DIR",
         ):
             assert not hasattr(fetch_training_data, attr)
+
+    def test_lecture_identity_decoupled_from_workspace_catalog(self):
+        scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+        probe = """
+import sys
+from tafreegh.lecture_identity import LectureIdentity, match_canonical_subject
+
+assert "tafreegh.workspace_catalog" not in sys.modules
+ident = LectureIdentity.from_text("2026-11-01 رياض.mp3\\nالحمد لله")
+assert ident.date == "2026-11-01"
+assert ident.keyword == "رياض"
+assert match_canonical_subject("رياض", {"رياض": "رياض الصالحين"}) == ("رياض", "رياض الصالحين")
+assert "tafreegh.workspace_catalog" not in sys.modules
+"""
+        proc = subprocess.run(
+            [sys.executable, "-B", "-c", probe],
+            cwd=str(scripts_dir),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+
+    def test_resolve_runtime_context_uses_workspace_and_catalog(self, tmp_path: Path):
+        ctx = tmp_path / "CONTEXT.md"
+        ctx.write_text(
+            "## 3. توجيه المتون (Routing Map)\n\n"
+            "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
+            "| --- | --- | --- |\n"
+            "| `(مخصص)` | **مادة مخصصة** | متن |\n",
+            encoding="utf-8",
+        )
+        rules_md = tmp_path / "dialect-rules.md"
+        rules_md.write_text(
+            "## Attendee Anonymization (فلان)\n"
+            "- **Preserved Titles & Kunyas**: أخوكم فلان، أبو فلان، الشيخ فلان.\n"
+            "- **Preserved Non-Attendee Names**: (زيد).\n"
+            "## Colloquial Lexicon & Verbal Markers\n"
+            "- **مخصصة**\n",
+            encoding="utf-8",
+        )
+        ws = WorkspaceConfig.resolve(
+            project_root=tmp_path,
+            context_path=ctx,
+            dialect_rules_path=rules_md,
+            env={},
+        )
+        resolved_ws, resolved_cat = resolve_runtime_context(workspace=ws)
+        assert resolved_ws is ws
+        assert resolved_cat.canonical_subjects == frozenset({"مادة مخصصة"})
+        assert resolved_cat.dialect_markers == frozenset({"مخصصة"})
+
+        override_cat = RuleCatalog(dialect_markers=frozenset({"علامة"}))
+        same_ws, same_cat = resolve_runtime_context(workspace=ws, catalog=override_cat)
+        assert same_ws is ws
+        assert same_cat is override_cat
 
 

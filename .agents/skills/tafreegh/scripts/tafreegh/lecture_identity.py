@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from .arabic_normalizer import normalize_arabic, normalize_arabic_token
-from .workspace_catalog import RuleCatalog
 
 # Ensure UTF-8 output
 if hasattr(sys.stdout, 'reconfigure'):
@@ -37,7 +36,7 @@ def match_canonical_subject(
     """Matches text against canonical routing in descending length order."""
     if not text:
         return None, None
-    rm = routing_map if routing_map is not None else RuleCatalog.load().routing_map
+    rm = routing_map if routing_map is not None else {}
     norm_text = normalize_arabic(text)
     for key in sorted(rm.keys(), key=len, reverse=True):
         if normalize_arabic(key) in norm_text:
@@ -163,7 +162,7 @@ class LectureIdentity:
         if self.stem and normalize_stem(self.stem) == cleaned_cand:
             return True
 
-        rm = routing_map if routing_map is not None else RuleCatalog.load().routing_map
+        rm = routing_map if routing_map is not None else {}
 
         seed_tokens: set[str] = set()
         if self.keyword:
@@ -249,7 +248,7 @@ class LectureIdentity:
         Extracts date, keyword, audio_file, clean canonical subject_name,
         and lecture_number from markdown text, filenames, or raw transcript headers.
         """
-        rm = routing_map if routing_map is not None else RuleCatalog.load().routing_map
+        rm = routing_map if routing_map is not None else {}
         identity = cls()
 
         # 1. Date extraction (YYYY-MM-DD)

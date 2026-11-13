@@ -11,6 +11,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from .arabic_normalizer import normalize_arabic, normalize_arabic_token, strip_tashkeel
+from .lecture_identity import match_canonical_subject
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_DIALECT_RULES = _SKILL_ROOT / "references" / "dialect-rules.md"
@@ -212,7 +213,6 @@ class CanonicalCourseEntry:
     primary_keyword: str
     keywords: tuple[str, ...]
     aliases: tuple[str, ...]
-    matn_source: str = ""
 
     def folder_search_candidates(self, query_keyword: str | None = None) -> tuple[str, ...]:
         """Returns ordered folder search candidates starting from query/primary keyword."""
@@ -406,7 +406,6 @@ def _parse_routing_courses(
     in_table = False
     kw_col_idx = 0
     subj_col_idx = 1
-    matn_col_idx: int | None = 2
     header_found = False
 
     courses: list[CanonicalCourseEntry] = []
@@ -439,15 +438,12 @@ def _parse_routing_courses(
         if not header_found:
             found_kw = None
             found_subj = None
-            found_matn = None
             for idx, cell in enumerate(cells):
                 norm_c = normalize_arabic(cell)
                 if any(w in norm_c for w in ("الكلمة", "الدلالية", "keyword")):
                     found_kw = idx
                 elif any(w in norm_c for w in ("المادة", "المعتمدة", "subject")):
                     found_subj = idx
-                elif any(w in norm_c for w in ("المتن", "مصدره", "matn", "source")):
-                    found_matn = idx
             if found_kw is not None or found_subj is not None:
                 header_found = True
                 in_table = True
@@ -455,7 +451,6 @@ def _parse_routing_courses(
                     kw_col_idx = found_kw
                 if found_subj is not None:
                     subj_col_idx = found_subj
-                matn_col_idx = found_matn
                 continue
 
         in_table = True
@@ -464,11 +459,6 @@ def _parse_routing_courses(
             cells[subj_col_idx]
             if subj_col_idx < len(cells)
             else (cells[1] if len(cells) > 1 else cells[0])
-        )
-        matn_cell = (
-            cells[matn_col_idx]
-            if matn_col_idx is not None and matn_col_idx < len(cells)
-            else ""
         )
 
         bold_match = re.search(r"\*\*([^*]+)\*\*", subject_cell)
@@ -488,7 +478,6 @@ def _parse_routing_courses(
             primary_keyword=tokens[0] if tokens else canonical_name,
             keywords=tuple(tokens),
             aliases=aliases,
-            matn_source=matn_cell,
         )
         courses.append(entry)
         for alias in aliases:
@@ -653,7 +642,8 @@ def _parse_dialect_rules(
         vocative_stopwords=_DEFAULT_VOCATIVE_STOPWORDS,
         known_attendee_names=frozenset(known_attendee_names),
     )
-    return frozenset(_BASE_DIALECT_MARKERS | markers), tuple(replacements), attendee_rules
+    resolved_markers = frozenset(markers) if markers else _BASE_DIALECT_MARKERS
+    return resolved_markers, tuple(replacements), attendee_rules
 
 
 @dataclass(frozen=True)
@@ -711,13 +701,7 @@ class RuleCatalog:
 
     def match_subject(self, text: str) -> tuple[str | None, str | None]:
         """Matches text against canonical routing keys in descending length order."""
-        if not text:
-            return None, None
-        norm_text = normalize_arabic(text)
-        for key in sorted(self.routing_map.keys(), key=len, reverse=True):
-            if normalize_arabic(key) in norm_text:
-                return key, self.routing_map[key]
-        return None, None
+        return match_canonical_subject(text, self.routing_map)
 
     def resolve_course(self, keyword_or_subject: str) -> CanonicalCourseEntry | None:
         """Resolves a keyword, alias, or canonical subject name to its CanonicalCourseEntry."""
@@ -785,3 +769,35 @@ class RuleCatalog:
 
         fallback_name = course.primary_keyword if course is not None else cleaned
         return base_path / fallback_name
+
+
+def resolve_runtime_context(
+    *,
+    workspace: WorkspaceConfig | None = None,
+    catalog: RuleCatalog | None = None,
+    project_root: Path | str | None = None,
+    onedrive_base: Path | str | None = None,
+    context_path: Path | str | None = None,
+    dialect_rules_path: Path | str | None = None,
+) -> tuple[WorkspaceConfig, RuleCatalog]:
+    """Resolves active WorkspaceConfig and RuleCatalog pair without redundant loads."""
+    active_workspace = (
+        workspace
+        if workspace is not None
+        else WorkspaceConfig.resolve(
+            project_root=project_root,
+            onedrive_base=onedrive_base,
+            context_path=context_path,
+            dialect_rules_path=dialect_rules_path,
+        )
+    )
+    active_catalog = (
+        catalog
+        if catalog is not None
+        else RuleCatalog.load(
+            context_path=context_path,
+            dialect_rules_path=dialect_rules_path,
+            workspace=active_workspace,
+        )
+    )
+    return active_workspace, active_catalog

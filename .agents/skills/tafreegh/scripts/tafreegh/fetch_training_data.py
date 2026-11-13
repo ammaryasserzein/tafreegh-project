@@ -10,7 +10,7 @@ from pathlib import Path
 from . import read_docx
 from .diff_cues import CueResult, detect_new_student_cues, format_cue_report
 from .lecture_identity import LectureIdentity
-from .workspace_catalog import RuleCatalog, WorkspaceConfig
+from .workspace_catalog import RuleCatalog, WorkspaceConfig, resolve_runtime_context
 
 
 def _find_ai_baseline(
@@ -23,11 +23,9 @@ def _find_ai_baseline(
     catalog: RuleCatalog | None = None,
 ) -> Path | None:
     """Search for the corresponding _AI.md baseline file in known directories using LectureIdentity."""
-    active_workspace = (
-        workspace if workspace is not None else WorkspaceConfig.resolve()
-    )
-    active_catalog = (
-        catalog if catalog is not None else RuleCatalog.load(workspace=active_workspace)
+    active_workspace, active_catalog = resolve_runtime_context(
+        workspace=workspace,
+        catalog=catalog,
     )
     ident = identity or LectureIdentity(
         date=date_str or None,
@@ -75,16 +73,13 @@ def _find_ai_baseline(
 
 
 def main(
-    argv: list[str] | None = None,
     *,
     workspace: WorkspaceConfig | None = None,
     catalog: RuleCatalog | None = None,
 ) -> int:
-    active_workspace = (
-        workspace if workspace is not None else WorkspaceConfig.resolve()
-    )
-    active_catalog = (
-        catalog if catalog is not None else RuleCatalog.load(workspace=active_workspace)
+    active_workspace, active_catalog = resolve_runtime_context(
+        workspace=workspace,
+        catalog=catalog,
     )
     training_data_dir = active_workspace.training_data_dir
     onedrive_base = active_workspace.onedrive_base

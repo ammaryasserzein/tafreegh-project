@@ -247,6 +247,23 @@ Source guide
 
 
 class TestCreateDocx(unittest.TestCase):
+    def test_create_docx_uses_workspace_context_path(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            context_path = root / "CONTEXT.md"
+            context_path.write_text(
+                "## 3. توجيه المتون (Routing Map)\n\n"
+                "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
+                "| --- | --- | --- |\n"
+                "| `(مخصص)` | **مادة مخصصة للاختبار** | متن |\n",
+                encoding="utf-8",
+            )
+            ws = WorkspaceConfig.resolve(project_root=root, context_path=context_path, env={})
+            out_file = root / "out.docx"
+            create_docx("2026-11-01 مخصص.mp3\n\nالحمد لله رب العالمين.", out_file, workspace=ws)
+            doc = docx.Document(str(out_file))
+            self.assertEqual(doc.paragraphs[1].text, "المادة: مادة مخصصة للاختبار")
+
     def test_create_docx_override_precedence(self):
         sample_md = """بسم الله الرحمن الرحيم
 المادة: قديم
@@ -785,10 +802,11 @@ class TestLectureIdentity(unittest.TestCase):
         self.assertFalse(ident_num.matches("18-فقه_البيوع_18.md"))
 
     def test_lecture_identity_matching_with_subject_name_only(self):
-        # Identity instantiated with only subject_name (no keyword) must derive tokens and match stems
+        # Identity instantiated with only subject_name derives direct tokens; catalog routing_map enables aliases
+        routing_map = RuleCatalog.load().routing_map
         ident_subj = LectureIdentity(lecture_number="17", subject_name="فقه البيوع (سعد الخثلان)")
         self.assertTrue(ident_subj.matches("17-فقه_البيوع_17.md"))
-        self.assertTrue(ident_subj.matches("17-بيوع-17.docx"))
+        self.assertTrue(ident_subj.matches("17-بيوع-17.docx", routing_map=routing_map))
         self.assertFalse(ident_subj.matches("18-فقه_البيوع_18.md"))
         self.assertFalse(ident_subj.matches("17-رياض-17.md"))
 

@@ -27,7 +27,7 @@ from .matn_matcher import (
     MatchMode,
     SequentialMatnMatcher,
 )
-from .workspace_catalog import RuleCatalog, WorkspaceConfig
+from .workspace_catalog import RuleCatalog, WorkspaceConfig, resolve_runtime_context
 
 # Ensure UTF-8 output on Windows
 if hasattr(sys.stdout, "reconfigure"):
@@ -363,8 +363,7 @@ def _check_headers_and_conclusion(
     doc: docx.Document,
     para_records: list[ParagraphRecord],
     report: ValidationReport,
-    context_path: Path | str | None = None,
-    catalog: RuleCatalog | None = None,
+    catalog: RuleCatalog,
 ) -> None:
     if len(doc.paragraphs) <= HEADER_LINE_COUNT:
         _flag(
@@ -395,13 +394,8 @@ def _check_headers_and_conclusion(
             p0_text[:60],
         )
 
-    active_catalog = (
-        catalog
-        if catalog is not None
-        else RuleCatalog.load(context_path=context_path)
-    )
     p1_text = doc.paragraphs[1].text.strip()
-    canonical_subjects = active_catalog.canonical_subjects
+    canonical_subjects = catalog.canonical_subjects
     if not p1_text.startswith("المادة: "):
         _flag(
             report,
@@ -422,7 +416,7 @@ def _check_headers_and_conclusion(
             )
 
     p2_text = doc.paragraphs[2].text.strip()
-    p2_ident = LectureIdentity.from_text(p2_text, routing_map=active_catalog.routing_map)
+    p2_ident = LectureIdentity.from_text(p2_text, routing_map=catalog.routing_map)
     normalized_p2 = re.sub(r"\s+", " ", p2_text)
     if not ((p2_ident.date or p2_ident.lecture_number) and p2_ident.header_line_3 == normalized_p2):
         _flag(
@@ -585,17 +579,10 @@ def _strip_parenthesized_citations(text: str) -> str:
 def _check_dialect_and_dialogue(
     para_records: list[ParagraphRecord],
     report: ValidationReport,
-    dialect_rules: list[tuple[re.Pattern, str]] | tuple[tuple[re.Pattern, str], ...] | None = None,
-    dialect_rules_path: Path | str | None = None,
-    catalog: RuleCatalog | None = None,
+    catalog: RuleCatalog,
 ) -> None:
-    active_catalog = (
-        catalog
-        if catalog is not None
-        else RuleCatalog.load(dialect_rules_path=dialect_rules_path)
-    )
-    rules = dialect_rules if dialect_rules is not None else active_catalog.dialect_replacements
-    attendee_rules = active_catalog.attendee_rules
+    rules = catalog.dialect_replacements
+    attendee_rules = catalog.attendee_rules
 
     for rec in para_records:
         if rec.index < HEADER_LINE_COUNT:
@@ -714,16 +701,15 @@ FALLBACK_MATN_TRIGGERS: list[tuple[str, re.Pattern]] = [
 
 def _has_colloquial_marker(
     text: str,
-    dialect_markers: frozenset[str] | set[str] | None = None,
+    dialect_markers: frozenset[str] | set[str],
 ) -> bool:
-    markers = dialect_markers if dialect_markers is not None else RuleCatalog.load().dialect_markers
     plain = strip_tashkeel(text)
     if re.search(r"(?<!\w)هو\s+[\u0600-\u06FF\s]+\s+ولا\s+", plain):
         return True
     words = re.findall(r"[\u0600-\u06FF]+", plain)
     for w in words:
         w_norm = normalize_arabic(w)
-        if w in markers or w_norm in markers:
+        if w in dialect_markers or w_norm in dialect_markers:
             return True
         if w.startswith(("هت", "هي", "بي", "بت", "ما")) and w.endswith("ش") and len(w) >= 4:
             return True
@@ -732,7 +718,7 @@ def _has_colloquial_marker(
 
 def _extract_leading_classical_clause(
     candidate: str,
-    dialect_markers: frozenset[str] | set[str] | None = None,
+    dialect_markers: frozenset[str] | set[str],
 ) -> str:
     """Extracts consecutive leading Classical Arabic sub-clauses before any colloquial shift."""
     # Split on parenthetical colloquial glosses or commas
@@ -751,7 +737,7 @@ def _extract_leading_classical_clause(
 def _check_unbolded_fallback_matn(
     para_records: list[ParagraphRecord],
     report: ValidationReport,
-    dialect_markers: frozenset[str] | set[str] | None = None,
+    dialect_markers: frozenset[str] | set[str],
 ) -> None:
     """Detects candidate unbolded Classical Arabic Sharh/Matn clauses inside explanation paragraphs."""
     for rec in para_records:
@@ -1016,14 +1002,11 @@ def verify_docx(
     report = ValidationReport(docx_path=str(docx_path))
     doc = docx.Document(str(docx_path))
 
-    active_catalog = (
-        catalog
-        if catalog is not None
-        else RuleCatalog.load(
-            context_path=context_path,
-            dialect_rules_path=dialect_rules_path,
-            workspace=workspace,
-        )
+    _, active_catalog = resolve_runtime_context(
+        workspace=workspace,
+        catalog=catalog,
+        context_path=context_path,
+        dialect_rules_path=dialect_rules_path,
     )
 
     para_records = _check_ooxml_styling(doc, report)

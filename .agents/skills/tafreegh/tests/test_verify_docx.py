@@ -760,7 +760,7 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
                 "- **Preserved Non-Attendee Names**: (زيد).\n"
                 "- **Known Attendee Names**: (حذيفة).\n"
                 "## Colloquial Lexicon & Verbal Markers\n"
-                "- **عامية_اختبار**\n",
+                "- **خوياية**\n",
                 encoding="utf-8",
             )
             ws = WorkspaceConfig.resolve(
@@ -776,20 +776,26 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
 
 الحمد لله رب العالمين. يا حذيفة انتبه.
 
+قال: خوياية هذا كلام طويل جدا جدا.
+
 الحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
 """
             docx_path = root / "custom_verify.docx"
             create_docx(doc_md, docx_path, workspace=ws, catalog=custom_catalog)
 
+            default_codes = [i.code for i in verify_docx(docx_path).issues]
+            self.assertIn("HEADER_P1_SUBJECT_INVALID", default_codes)
+            self.assertIn("UNBOLDED_FALLBACK_MATN", default_codes)
+            self.assertNotIn("ATTENDEE_NAME_UNANONYMIZED", default_codes)
+
             rep_ws = verify_docx(docx_path, workspace=ws)
-            self.assertNotIn("HEADER_SUBJECT_UNRECOGNIZED", [i.code for i in rep_ws.issues])
-            self.assertIn("ATTENDEE_NAME_UNANONYMIZED", [i.code for i in rep_ws.issues])
+            ws_codes = [i.code for i in rep_ws.issues]
+            self.assertNotIn("HEADER_P1_SUBJECT_INVALID", ws_codes)
+            self.assertNotIn("UNBOLDED_FALLBACK_MATN", ws_codes)
+            self.assertIn("ATTENDEE_NAME_UNANONYMIZED", ws_codes)
 
             rep_cat = verify_docx(docx_path, catalog=custom_catalog)
-            self.assertEqual(
-                [i.code for i in rep_ws.issues],
-                [i.code for i in rep_cat.issues],
-            )
+            self.assertEqual(ws_codes, [i.code for i in rep_cat.issues])
 
 
 class TestVerifyDocxCoverageAndFallbackMatn(unittest.TestCase):

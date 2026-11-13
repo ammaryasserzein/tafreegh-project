@@ -19,7 +19,7 @@ from .matn_matcher import (
     SequentialMatnMatcher,
     generate_fallback_summary,
 )
-from .workspace_catalog import RuleCatalog, WorkspaceConfig
+from .workspace_catalog import RuleCatalog, WorkspaceConfig, resolve_runtime_context
 
 # Ensure UTF-8 output
 if hasattr(sys.stdout, 'reconfigure'):
@@ -60,12 +60,12 @@ def get_onedrive_folder(
     Returns the target OneDrive folder Path for a given discipline keyword.
     Scans the base_path dynamically using catalog course alias groups.
     """
-    resolved_base = (
-        Path(base_path)
-        if base_path is not None
-        else (workspace or WorkspaceConfig.resolve()).onedrive_base
+    active_workspace, active_catalog = resolve_runtime_context(
+        workspace=workspace,
+        catalog=catalog,
+        onedrive_base=base_path,
     )
-    active_catalog = catalog if catalog is not None else RuleCatalog.load(workspace=workspace)
+    resolved_base = Path(base_path) if base_path is not None else active_workspace.onedrive_base
     return active_catalog.resolve_onedrive_folder(keyword, resolved_base)
 
 
@@ -242,10 +242,14 @@ def create_docx(
     markdown_text = re.sub(r'`([^`]*[\u0600-\u06FF]+[^`]*)`', r'\1', markdown_text)
     markdown_text = _strip_hybrid_summary(markdown_text)
 
+    active_workspace, active_catalog = resolve_runtime_context(
+        workspace=workspace,
+        catalog=catalog,
+    )
     resolved_template = (
         Path(template_path)
         if template_path is not None
-        else (workspace or WorkspaceConfig.resolve()).word_base_template
+        else active_workspace.word_base_template
     )
     if resolved_template and resolved_template.exists():
         doc = docx.Document(str(resolved_template))
@@ -261,7 +265,7 @@ def create_docx(
         s.left_margin = Inches(0.5)
         s.right_margin = Inches(0.5)
         
-    ident = resolve_document_identity(markdown_text, identity, catalog=catalog)
+    ident = resolve_document_identity(markdown_text, identity, catalog=active_catalog)
     clean_subject = ident.resolved_subject
     third_line = ident.header_line_3
     
@@ -405,11 +409,10 @@ def archive_processed_inputs(
     03_AI_Outputs remains flat and untouched.
     """
     ident = identity
-    active_workspace = (
-        workspace if workspace is not None else WorkspaceConfig.resolve(project_root=project_root)
-    )
-    active_catalog = (
-        catalog if catalog is not None else RuleCatalog.load(workspace=active_workspace)
+    active_workspace, active_catalog = resolve_runtime_context(
+        workspace=workspace,
+        catalog=catalog,
+        project_root=project_root,
     )
     matn_dir = active_workspace.matn_sources_dir
     raw_dir = active_workspace.raw_inputs_dir
@@ -475,11 +478,10 @@ def find_matching_matn_source(
     or 01_Matn_Sources/processed/ (if reprocessing).
     """
     ident = identity
-    active_workspace = (
-        workspace if workspace is not None else WorkspaceConfig.resolve(project_root=project_root)
-    )
-    active_catalog = (
-        catalog if catalog is not None else RuleCatalog.load(workspace=active_workspace)
+    active_workspace, active_catalog = resolve_runtime_context(
+        workspace=workspace,
+        catalog=catalog,
+        project_root=project_root,
     )
     matn_dir = active_workspace.matn_sources_dir
     if not matn_dir.exists():
@@ -710,18 +712,11 @@ def export_documents(
     Interleaves canonical Matn alignment via SequentialMatnMatcher if available.
     On confirmed export, atomically archives input files into processed/.
     """
-    active_workspace = (
-        workspace
-        if workspace is not None
-        else WorkspaceConfig.resolve(
-            project_root=project_root,
-            onedrive_base=base_onedrive,
-        )
-    )
-    active_catalog = (
-        catalog
-        if catalog is not None
-        else RuleCatalog.load(workspace=active_workspace)
+    active_workspace, active_catalog = resolve_runtime_context(
+        workspace=workspace,
+        catalog=catalog,
+        project_root=project_root,
+        onedrive_base=base_onedrive,
     )
     markdown_text = _strip_hybrid_summary(markdown_text)
     ident = parse_metadata(markdown_text, catalog=active_catalog)
