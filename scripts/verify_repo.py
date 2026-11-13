@@ -165,21 +165,19 @@ def _is_git_worktree_pointer(candidate: Path) -> bool:
 def check_no_root_scratch(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     for candidate in base_dir.iterdir():
         if candidate.is_dir() or candidate.is_junction():
-            if candidate.name not in ALLOWED_ROOT_DIRS:
-                findings.append(Finding(
-                    category=FindingCategory.SCRATCH,
-                    message=f"Root-level scratch directory found: {candidate.name}. Move to .scratch/ or $env:TEMP",
-                    file_path=candidate.name
-                ))
+            kind, is_allowed = "directory", candidate.name in ALLOWED_ROOT_DIRS
         elif candidate.is_file():
-            if _is_git_worktree_pointer(candidate):
-                continue
-            if candidate.name not in ALLOWED_ROOT_FILES:
-                findings.append(Finding(
-                    category=FindingCategory.SCRATCH,
-                    message=f"Root-level scratch file found: {candidate.name}. Move to .scratch/ or $env:TEMP",
-                    file_path=candidate.name
-                ))
+            kind = "file"
+            is_allowed = _is_git_worktree_pointer(candidate) or candidate.name in ALLOWED_ROOT_FILES
+        else:
+            continue
+
+        if not is_allowed:
+            findings.append(Finding(
+                category=FindingCategory.SCRATCH,
+                message=f"Root-level scratch {kind} found: {candidate.name}. Move to .scratch/ or $env:TEMP",
+                file_path=candidate.name
+            ))
 
 def check_scratch_cleanliness(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     check_no_root_scratch(findings, base_dir=base_dir)

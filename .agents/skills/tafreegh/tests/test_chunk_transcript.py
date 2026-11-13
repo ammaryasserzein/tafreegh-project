@@ -6,9 +6,7 @@ from pathlib import Path
 
 import pytest
 
-SKILL_DIR = Path(__file__).resolve().parent.parent
-REPO_ROOT = SKILL_DIR.parent.parent.parent
-SCRIPTS_DIR = SKILL_DIR / "scripts"
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 CANONICAL_SCRIPT = SCRIPTS_DIR / "chunk_transcript.py"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
@@ -44,18 +42,35 @@ def test_smart_chunk_text_splits_at_sentence_boundaries_preserving_all_words():
     assert " ".join(chunks).split() == text.split()
 
 
-def test_smart_chunk_text_respects_arabic_question_and_newline_boundaries():
-    paragraphs = [
-        "هل هذه المسألة متفق عليها بين الفقهاء؟ نعم فيها قولان معروفان عند أهل العلم",
-        "وما دليل القول الأول في هذا الباب؟ الدليل قول النبي صلى الله عليه وسلم في الصحيح",
-        "وما وجه الاستدلال من هذا الحديث الشريف؟ وجهه ظاهر في سياق الرواية الصحيحة",
+def test_smart_chunk_text_splits_at_arabic_question_mark_boundaries():
+    questions = [
+        f"هل هذه المسألة الفقهية رقم {i} متفق عليها بين أئمة المذاهب الأربعة؟"
+        for i in range(1, 7)
     ]
-    text = "\n".join(paragraphs)
+    text = " ".join(questions)
 
-    chunks = chunk_transcript.smart_chunk_text(text, target_words=14, min_words=10, max_words=20)
+    chunks = chunk_transcript.smart_chunk_text(text, target_words=24, min_words=18, max_words=30)
 
     assert len(chunks) >= 2
-    assert chunks[0].endswith("؟") or "\n" not in chunks[0]
+    for chunk in chunks[:-1]:
+        assert chunk.endswith("؟")
+        assert 18 <= len(chunk.split()) <= 30
+    assert " ".join(chunks).split() == text.split()
+
+
+def test_smart_chunk_text_splits_at_newline_boundaries():
+    lines = [
+        f"السطر العلمي رقم {i} يشرح كلام المصنف رحمه الله بدون علامات ترقيم ختامية"
+        for i in range(1, 7)
+    ]
+    text = "\n".join(lines)
+
+    chunks = chunk_transcript.smart_chunk_text(text, target_words=26, min_words=20, max_words=32)
+
+    assert len(chunks) >= 2
+    for chunk in chunks[:-1]:
+        assert 20 <= len(chunk.split()) <= 32
+        assert chunk.endswith("ختامية")
     assert " ".join(chunks).split() == text.split()
 
 
@@ -87,7 +102,7 @@ def test_chunk_file_missing_input_exits_with_nonzero(tmp_path):
     assert exc_info.value.code == 1
 
 
-def test_cli_usage_points_to_canonical_skill_script_and_duplicate_is_removed():
+def test_cli_usage_points_to_canonical_skill_script():
     result = subprocess.run(
         [sys.executable, str(CANONICAL_SCRIPT)],
         capture_output=True,
@@ -97,4 +112,3 @@ def test_cli_usage_points_to_canonical_skill_script_and_duplicate_is_removed():
     )
     assert result.returncode == 1
     assert ".agents/skills/tafreegh/scripts/chunk_transcript.py" in result.stdout
-    assert not (REPO_ROOT / "scripts" / "chunk_transcript.py").exists()

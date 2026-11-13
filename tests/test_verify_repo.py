@@ -107,6 +107,12 @@ def test_check_directories_flags_unauthorized_subdirectory(tmp_path):
     assert len(dir_findings) == 1
     assert "Unauthorized subdirectory" in dir_findings[0].message
 
+def _scratch_findings(base_dir: Path) -> list[verify_repo.Finding]:
+    findings = []
+    verify_repo.check_no_root_scratch(findings, base_dir=base_dir)
+    return [f for f in findings if f.category == verify_repo.FindingCategory.SCRATCH]
+
+
 def test_check_no_root_scratch_allows_standard_files(tmp_path):
     for filename in (
         "CODING_STANDARDS.md",
@@ -123,9 +129,7 @@ def test_check_no_root_scratch_allows_standard_files(tmp_path):
     ):
         (tmp_path / filename).write_text("Test", encoding="utf-8")
 
-    findings = []
-    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
-    assert len(findings) == 0, f"Expected 0 findings, got: {findings}"
+    assert _scratch_findings(tmp_path) == []
 
 
 def test_check_no_root_scratch_flags_unauthorized_scratch(tmp_path):
@@ -133,21 +137,16 @@ def test_check_no_root_scratch_flags_unauthorized_scratch(tmp_path):
     (tmp_path / "detailed_diff.py").write_text("Test", encoding="utf-8")
     (tmp_path / "temp.md").write_text("Test", encoding="utf-8")
 
-    findings = []
-    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
-    scratch_findings = [f for f in findings if f.category == verify_repo.FindingCategory.SCRATCH]
+    scratch_findings = _scratch_findings(tmp_path)
     assert len(scratch_findings) == 2
-    flagged_files = {f.file_path for f in scratch_findings}
-    assert flagged_files == {"detailed_diff.py", "temp.md"}
+    assert {f.file_path for f in scratch_findings} == {"detailed_diff.py", "temp.md"}
 
 
 def test_check_no_root_scratch_rejects_retired_root_files(tmp_path):
     (tmp_path / "README.md").write_text("Retired", encoding="utf-8")
     (tmp_path / "handoff.md").write_text("Retired", encoding="utf-8")
 
-    findings = []
-    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
-    scratch_findings = [f for f in findings if f.category == verify_repo.FindingCategory.SCRATCH]
+    scratch_findings = _scratch_findings(tmp_path)
     assert {f.file_path for f in scratch_findings} == {"README.md", "handoff.md"}
 
 
@@ -157,17 +156,13 @@ def test_check_no_root_scratch_allows_git_worktree_pointer_file(tmp_path):
         encoding="utf-8",
     )
 
-    findings = []
-    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
-    assert len(findings) == 0, f"Expected 0 findings, got: {findings}"
+    assert _scratch_findings(tmp_path) == []
 
 
 def test_check_no_root_scratch_rejects_invalid_git_file(tmp_path):
     (tmp_path / ".git").write_text("not a valid pointer\n", encoding="utf-8")
 
-    findings = []
-    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
-    scratch_findings = [f for f in findings if f.category == verify_repo.FindingCategory.SCRATCH]
+    scratch_findings = _scratch_findings(tmp_path)
     assert len(scratch_findings) == 1
     assert scratch_findings[0].file_path == ".git"
 
@@ -193,9 +188,7 @@ def test_check_no_root_scratch_allows_standard_and_tooling_directories(tmp_path)
     ):
         (tmp_path / dirname).mkdir()
 
-    findings = []
-    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
-    assert len(findings) == 0, f"Expected 0 findings, got: {findings}"
+    assert _scratch_findings(tmp_path) == []
 
 
 def test_check_no_root_scratch_flags_unauthorized_root_directories(tmp_path):
@@ -205,10 +198,13 @@ def test_check_no_root_scratch_flags_unauthorized_root_directories(tmp_path):
     (tmp_path / "tmp_notes").mkdir()
     (tmp_path / ".scratch_extra").mkdir()
 
-    findings = []
-    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
-    scratch_findings = [f for f in findings if f.category == verify_repo.FindingCategory.SCRATCH]
+    scratch_findings = _scratch_findings(tmp_path)
     assert {f.file_path for f in scratch_findings} == {"scratch", "tmp_notes", ".scratch_extra"}
+
+
+def test_single_canonical_chunker_location():
+    assert (REPO_ROOT / ".agents" / "skills" / "tafreegh" / "scripts" / "chunk_transcript.py").is_file()
+    assert not (REPO_ROOT / "scripts" / "chunk_transcript.py").exists()
 
 
 def test_count_open_deferred_reviews(tmp_path):
