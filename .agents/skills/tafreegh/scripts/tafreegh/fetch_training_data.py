@@ -125,7 +125,7 @@ def main(
             mtime = os.path.getmtime(docx_path)
             date_str = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
             md_filename = f"{date_str}_{subject}_{filename_stem}.md"
-            identity.date = date_str
+            identity = identity.merge(LectureIdentity(date=date_str))
 
         md_filepath = training_data_dir / md_filename
 

@@ -11,6 +11,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+from . import lecture_identity
 from .arabic_normalizer import normalize_arabic
 from .lecture_identity import LectureIdentity
 from .matn_matcher import (
@@ -27,26 +28,6 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 DEFAULT_FONT_NAME = "Traditional Arabic"
 DEFAULT_FONT_SIZE = 18
-
-NOTEBOOKLM_HEADER_PATTERNS = [
-    re.compile(r'^(?:المصادر|مصادر|المصدر|دليل المصدر|دليل مصادر)$', re.IGNORECASE),
-    re.compile(r'^(?:source\s*guide|sources)$', re.IGNORECASE),
-    re.compile(r'^\d{4}-\d{2}-\d{2}[ _]+.*\.(?:mp3|m4a|wav|aac|ogg|opus)$', re.IGNORECASE),
-    re.compile(r'^.*\.(?:mp3|m4a|wav|aac|ogg|opus)$', re.IGNORECASE),
-]
-
-
-def parse_metadata(
-    text: str,
-    catalog: RuleCatalog | None = None,
-) -> LectureIdentity:
-    """
-    Extracts date, keyword, audio_file, clean canonical subject_name,
-    and lecture_number from markdown text, filenames, or raw transcript headers.
-    Returns a LectureIdentity domain entity with dict compatibility.
-    """
-    active_catalog = catalog if catalog is not None else RuleCatalog.load()
-    return LectureIdentity.from_text(text, routing_map=active_catalog.routing_map)
 
 
 def get_onedrive_folder(
@@ -67,88 +48,6 @@ def get_onedrive_folder(
     )
     resolved_base = Path(base_path) if base_path is not None else active_workspace.onedrive_base
     return active_catalog.resolve_onedrive_folder(keyword, resolved_base)
-
-
-def is_header_line(line: str) -> bool:
-    """Checks if a given line belongs to the standard header block or NotebookLM tags."""
-    l = line.strip()
-    if not l:
-        return True
-    if l in ("بسم الله الرحمن الرحيم", "بسم الله الرحمن الرحيم."):
-        return True
-    if l.startswith("المادة:") or l.startswith("اسم المادة:"):
-        return True
-    if re.match(r'^\d{4}-\d{2}-\d{2}$', l):
-        return True
-    if re.match(r'^(?:المحاضرة|محاضرة|الدرس|درس)\s*:\s*\d+$', l):
-        return True
-    if re.match(r'^\d+[-_][^\s\n\r]+?[-_]\d+$', l):
-        return True
-    for pat in NOTEBOOKLM_HEADER_PATTERNS:
-        if pat.match(l):
-            return True
-    return False
-
-
-def resolve_header_line_3(identity: LectureIdentity) -> str:
-    """Resolves the third header line deterministically (date, lecture number, or fallback)."""
-    return identity.header_line_3
-
-
-def resolve_document_identity(
-    markdown_text: str,
-    identity: LectureIdentity | None = None,
-    *,
-    catalog: RuleCatalog | None = None,
-) -> LectureIdentity:
-    """
-    Parses transcript metadata and merges explicit caller overrides.
-    If caller explicitly provided a lecture_number override without a date,
-    prioritizes numbered lecture formatting over parsed text date.
-    """
-    parsed = parse_metadata(markdown_text, catalog=catalog)
-    if identity:
-        ident = parsed.merge(identity)
-        if identity.lecture_number and not identity.date:
-            ident.date = None
-        return ident
-    return parsed
-
-
-def standardize_transcript_header(
-    markdown_text: str,
-    identity: LectureIdentity | None = None,
-    *,
-    catalog: RuleCatalog | None = None,
-) -> str:
-    """
-    Strips NotebookLM tags (Source guide, audio file names, etc.) and existing headers,
-    returning cleanly standardized markdown beginning with the 3-line centered header.
-    """
-    ident = resolve_document_identity(markdown_text, identity, catalog=catalog)
-    clean_subject = ident.resolved_subject
-    third_line = ident.header_line_3
-    
-    paragraphs = markdown_text.split('\n\n')
-    cleaned_paragraphs = []
-    
-    for para in paragraphs:
-        lines = [line.strip() for line in para.split('\n') if line.strip()]
-        if not lines:
-            continue
-        if all(is_header_line(l) for l in lines):
-            continue
-        while lines and is_header_line(lines[0]):
-            lines.pop(0)
-        if not lines:
-            continue
-        cleaned_paragraphs.append('\n'.join(lines))
-        
-    body = '\n\n'.join(cleaned_paragraphs)
-    header = f"بسم الله الرحمن الرحيم\nالمادة: {clean_subject}\n{third_line}"
-    if body:
-        return f"{header}\n\n{body}"
-    return header
 
 
 def set_p_rtl(p, align=None):
@@ -265,44 +164,33 @@ def create_docx(
         s.left_margin = Inches(0.5)
         s.right_margin = Inches(0.5)
         
-    ident = resolve_document_identity(markdown_text, identity, catalog=active_catalog)
-    clean_subject = ident.resolved_subject
-    third_line = ident.header_line_3
-    
-    # 1. P0: بسم الله الرحمن الرحيم (Centered)
-    p0 = doc.add_paragraph()
-    set_p_rtl(p0, align='center')
-    r0 = p0.add_run("بسم الله الرحمن الرحيم")
-    set_run_font(r0, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
-    
-    # 2. P1: المادة: [clean_subject] (Centered)
-    p1 = doc.add_paragraph()
-    set_p_rtl(p1, align='center')
-    r1 = p1.add_run(f"المادة: {clean_subject}")
-    set_run_font(r1, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
-    
-    # 3. P2: [third_line] (Centered)
-    p2 = doc.add_paragraph()
-    set_p_rtl(p2, align='center')
-    r2 = p2.add_run(third_line)
-    set_run_font(r2, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
-    
+    ident = lecture_identity.resolve_document_identity(
+        markdown_text,
+        identity,
+        routing_map=active_catalog.routing_map,
+    )
+    for header_line in ident.header_lines:
+        p_hdr = doc.add_paragraph()
+        set_p_rtl(p_hdr, align='center')
+        r_hdr = p_hdr.add_run(header_line)
+        set_run_font(r_hdr, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
+
     paragraphs = markdown_text.split('\n\n')
     for para_text in paragraphs:
         cleaned_para = para_text.strip()
         if not cleaned_para:
             continue
-            
+
         lines = [line.strip() for line in cleaned_para.split('\n') if line.strip()]
         if not lines:
             continue
-            
+
         # Skip paragraph if it consists entirely of header block lines
-        if all(is_header_line(l) for l in lines):
+        if all(lecture_identity.is_header_line(l) for l in lines):
             continue
-            
+
         # Strip any leading header lines if merged at top of paragraph
-        while lines and is_header_line(lines[0]):
+        while lines and lecture_identity.is_header_line(lines[0]):
             lines.pop(0)
             
         if not lines:
@@ -379,21 +267,6 @@ def format_thousands(text: str) -> str:
         else:
             return f"{num} ألف"
     return re.sub(r'\b(\d+)000\b', replacer, text)
-
-
-def is_matching_stem(
-    candidate_name: str,
-    identity: LectureIdentity,
-    *,
-    catalog: RuleCatalog | None = None,
-) -> bool:
-    """
-    Returns True if candidate_name matches the given lecture identifier,
-    supporting exact stem matches, date matches, and mirrored numbered stems
-    per ADR 0002 § 9, ADR 0004, and ADR 0005.
-    """
-    active_catalog = catalog if catalog is not None else RuleCatalog.load()
-    return identity.matches(candidate_name, routing_map=active_catalog.routing_map)
 
 
 def archive_processed_inputs(
@@ -719,25 +592,27 @@ def export_documents(
         onedrive_base=base_onedrive,
     )
     markdown_text = _strip_hybrid_summary(markdown_text)
-    ident = parse_metadata(markdown_text, catalog=active_catalog)
-
-    if original_md_path:
-        path_ident = LectureIdentity.from_filename(
+    path_ident = (
+        LectureIdentity.from_filename(
             Path(original_md_path).name,
             routing_map=active_catalog.routing_map,
         )
-        ident = ident.merge(path_ident)
+        if original_md_path
+        else None
+    )
+    cli_override = LectureIdentity(date=date, keyword=keyword) if (date or keyword) else None
+    effective_override = identity.merge(cli_override) if identity else cli_override
+    ident = lecture_identity.resolve_document_identity(
+        markdown_text,
+        effective_override,
+        path_identity=path_ident,
+        routing_map=active_catalog.routing_map,
+    )
 
-    if identity:
-        ident = ident.merge(identity)
-
-    if date or keyword:
-        ident = ident.merge(LectureIdentity(date=date, keyword=keyword))
-
-    clean_md = standardize_transcript_header(
+    clean_md = lecture_identity.standardize_transcript_header(
         markdown_text,
         identity=ident,
-        catalog=active_catalog,
+        routing_map=active_catalog.routing_map,
     )
     clean_md = format_thousands(clean_md)
 
@@ -754,12 +629,10 @@ def export_documents(
         clean_md = interleave_matn_segments(clean_md, matcher, catalog=active_catalog)
 
     # 2. Target OneDrive path (docx)
-    used_keyword = ident.keyword or "عام"
-    onedrive_dir = get_onedrive_folder(
+    used_keyword = ident.keyword or ident.subject_name or "عام"
+    onedrive_dir = active_catalog.resolve_onedrive_folder(
         used_keyword,
         active_workspace.onedrive_base,
-        catalog=active_catalog,
-        workspace=active_workspace,
     )
     if ident.date:
         docx_filename = f"{ident.date}.docx"

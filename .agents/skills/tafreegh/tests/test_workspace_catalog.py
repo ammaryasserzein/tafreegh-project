@@ -359,7 +359,7 @@ assert recorded == [], f"Unexpected import-time filesystem I/O: {recorded}"
 
         from tafreegh import export_docx, fetch_training_data, lecture_identity, verify_docx
 
-        for attr in ("load_canonical_routing", "CANONICAL_ROUTING"):
+        for attr in ("load_canonical_routing", "CANONICAL_ROUTING", "from_metadata"):
             assert not hasattr(lecture_identity, attr)
         for attr in (
             "CANONICAL_SUBJECT_NAMES",
@@ -371,6 +371,13 @@ assert recorded == [], f"Unexpected import-time filesystem I/O: {recorded}"
             "BASE_DIALECT_MARKERS",
             "load_dialect_markers",
             "DIALECT_MARKERS",
+            "NOTEBOOKLM_HEADER_PATTERNS",
+            "parse_metadata",
+            "is_header_line",
+            "resolve_header_line_3",
+            "resolve_document_identity",
+            "standardize_transcript_header",
+            "is_matching_stem",
         ):
             assert not hasattr(export_docx, attr)
         for attr in (
@@ -402,13 +409,24 @@ assert recorded == [], f"Unexpected import-time filesystem I/O: {recorded}"
         scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
         probe = """
 import sys
-from tafreegh.lecture_identity import LectureIdentity, match_canonical_subject
+from tafreegh.lecture_identity import (
+    LectureIdentity,
+    is_header_line,
+    match_canonical_subject,
+    resolve_document_identity,
+    standardize_transcript_header,
+)
 
 assert "tafreegh.workspace_catalog" not in sys.modules
 ident = LectureIdentity.from_text("2026-11-01 رياض.mp3\\nالحمد لله")
 assert ident.date == "2026-11-01"
 assert ident.keyword == "رياض"
 assert match_canonical_subject("رياض", {"رياض": "رياض الصالحين"}) == ("رياض", "رياض الصالحين")
+assert is_header_line("Source guide")
+resolved = resolve_document_identity("2026-11-01 رياض.mp3\\nالحمد", routing_map={"رياض": "رياض الصالحين"})
+assert resolved.subject_name == "رياض الصالحين"
+clean = standardize_transcript_header("Source guide\\n2026-11-01 رياض.mp3\\n\\nالحمد", routing_map={"رياض": "رياض الصالحين"})
+assert clean.startswith("بسم الله الرحمن الرحيم\\nالمادة: رياض الصالحين\\n2026-11-01")
 assert "tafreegh.workspace_catalog" not in sys.modules
 """
         proc = subprocess.run(

@@ -1,3 +1,4 @@
+import datetime
 import os
 import tempfile
 import unittest
@@ -86,6 +87,28 @@ class TestFetchTrainingData(unittest.TestCase):
         ident = LectureIdentity(lecture_number="17", stem="17-فقه_البيوع_17", keyword="بيوع")
         found = fetch_training_data._find_ai_baseline(identity=ident, workspace=self.workspace)
         self.assertEqual(found, ai_baseline_path)
+
+    def test_undated_unnumbered_docx_uses_mtime_without_mutating_identity(self):
+        subject_dir = self.workspace.onedrive_base / "1. رياض الصالحين" / "(تم التسليم)"
+        os.makedirs(subject_dir, exist_ok=True)
+
+        docx_path = subject_dir / "notes.docx"
+        docx_path.write_text("dummy docx content", encoding="utf-8")
+
+        mtime = 1791504000  # fixed timestamp
+        os.utime(docx_path, (mtime, mtime))
+        expected_date = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+
+        os.makedirs(self.workspace.ai_outputs_dir, exist_ok=True)
+        ai_baseline_path = self.workspace.ai_outputs_dir / f"{expected_date}_رياض_الصالحين_AI.md"
+        ai_baseline_path.write_text("الحمد لله\nنعم؟\nطالب: صوت غير مسموع.", encoding="utf-8")
+
+        rc = fetch_training_data.main(workspace=self.workspace)
+        self.assertEqual(rc, 0)
+
+        expected_md_path = self.workspace.training_data_dir / f"{expected_date}_رياض الصالحين_notes.md"
+        self.assertTrue(expected_md_path.exists())
+        self.assertEqual(expected_md_path.read_text(encoding="utf-8"), "**dummy text**")
 
 
 if __name__ == '__main__':

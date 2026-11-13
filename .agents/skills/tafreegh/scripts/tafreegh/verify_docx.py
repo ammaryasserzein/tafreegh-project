@@ -18,10 +18,9 @@ from .arabic_normalizer import (
 from .export_docx import (
     DEFAULT_FONT_NAME,
     DEFAULT_FONT_SIZE,
-    NOTEBOOKLM_HEADER_PATTERNS,
     read_matn_source_content,
 )
-from .lecture_identity import LectureIdentity
+from .lecture_identity import NOTEBOOKLM_HEADER_PATTERNS, LectureIdentity
 from .matn_matcher import (
     COMPOUND_SHARH_SPLIT_RE,
     MatchMode,

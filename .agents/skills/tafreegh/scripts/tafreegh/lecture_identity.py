@@ -3,14 +3,42 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
 
 from .arabic_normalizer import normalize_arabic, normalize_arabic_token
 
 # Ensure UTF-8 output
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
+
+NOTEBOOKLM_HEADER_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r'^(?:المصادر|مصادر|المصدر|دليل المصدر|دليل مصادر)$', re.IGNORECASE),
+    re.compile(r'^(?:source\s*guide|sources)$', re.IGNORECASE),
+    re.compile(r'^\d{4}-\d{2}-\d{2}[ _]+.*\.(?:mp3|m4a|wav|aac|ogg|opus)$', re.IGNORECASE),
+    re.compile(r'^.*\.(?:mp3|m4a|wav|aac|ogg|opus)$', re.IGNORECASE),
+)
+
+_FULL_DATE_LINE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+_FULL_LECTURE_LABEL_LINE_RE = re.compile(r'^(?:المحاضرة|محاضرة|الدرس|درس)\s*:\s*\d+$')
+_FULL_NUMBERED_STEM_LINE_RE = re.compile(r'^\d+[-_][^\s\n\r]+?[-_]\d+$')
+
+
+def is_header_line(line: str) -> bool:
+    """Checks if a given line belongs to the standard header block or NotebookLM tags."""
+    stripped = line.strip()
+    if not stripped:
+        return True
+    if stripped in ("بسم الله الرحمن الرحيم", "بسم الله الرحمن الرحيم."):
+        return True
+    if stripped.startswith("المادة:") or stripped.startswith("اسم المادة:"):
+        return True
+    if _FULL_DATE_LINE_RE.match(stripped):
+        return True
+    if _FULL_LECTURE_LABEL_LINE_RE.match(stripped):
+        return True
+    if _FULL_NUMBERED_STEM_LINE_RE.match(stripped):
+        return True
+    return any(pat.match(stripped) for pat in NOTEBOOKLM_HEADER_PATTERNS)
 
 
 def normalize_stem(candidate_name: str) -> str:
@@ -44,10 +72,10 @@ def match_canonical_subject(
     return None, None
 
 
-@dataclass
+@dataclass(frozen=True)
 class LectureIdentity:
     """
-    Consolidated domain entity representing a lecture's identity.
+    Immutable domain value object representing a lecture's identity.
     Encapsulates date, lecture_number, keyword, subject_name, audio_file, and stem,
     eliminating data clump and shotgun surgery smells across export and training pipelines.
     """
@@ -58,43 +86,6 @@ class LectureIdentity:
     audio_file: str | None = None
     stem: str | None = None
 
-    # --- Mapping / Dict compatibility for legacy callers ---
-    def __getitem__(self, key: str) -> Any:
-        if key in self.__dataclass_fields__:
-            return getattr(self, key)
-        raise KeyError(key)
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        if key in self.__dataclass_fields__:
-            setattr(self, key, value)
-        else:
-            raise KeyError(key)
-
-    def __contains__(self, key: object) -> bool:
-        return isinstance(key, str) and key in self.__dataclass_fields__
-
-    def get(self, key: str, default: Any = None) -> Any:
-        if key in self.__dataclass_fields__:
-            val = getattr(self, key)
-            return val if val is not None else default
-        return default
-
-    def items(self):
-        return {
-            "date": self.date,
-            "lecture_number": self.lecture_number,
-            "keyword": self.keyword,
-            "subject_name": self.subject_name,
-            "audio_file": self.audio_file,
-            "stem": self.stem,
-        }.items()
-
-    def keys(self):
-        return ["date", "lecture_number", "keyword", "subject_name", "audio_file", "stem"]
-
-    def values(self):
-        return [self.date, self.lecture_number, self.keyword, self.subject_name, self.audio_file, self.stem]
-
     # --- Domain Properties ---
     @property
     def header_line_3(self) -> str:
@@ -104,6 +95,15 @@ class LectureIdentity:
         if self.lecture_number:
             return f"المحاضرة: {self.lecture_number}"
         return "تاريخ_غير_محدد"
+
+    @property
+    def header_lines(self) -> tuple[str, str, str]:
+        """Returns the canonical 3-line lecture header tuple."""
+        return (
+            "بسم الله الرحمن الرحيم",
+            f"المادة: {self.resolved_subject}",
+            self.header_line_3,
+        )
 
     @property
     def resolved_stem(self) -> str:
@@ -123,17 +123,16 @@ class LectureIdentity:
         """Returns subject_name, keyword, or generic fallback."""
         return self.subject_name or self.keyword or "المادة"
 
-    def merge(self, other: LectureIdentity | dict | None) -> LectureIdentity:
+    def merge(self, other: LectureIdentity | None) -> LectureIdentity:
         """
         Returns a new LectureIdentity where non-empty fields from other override self,
         while fields not specified in other are preserved from self.
         """
-        if not other:
+        if other is None:
             return self
-        get_val = (lambda k: other.get(k)) if hasattr(other, 'get') else (lambda k: getattr(other, k, None))
 
         def _pick(field: str) -> str | None:
-            val_other = get_val(field)
+            val_other = getattr(other, field, None)
             if val_other is not None and str(val_other).strip() != "":
                 return str(val_other)
             return getattr(self, field)
@@ -182,8 +181,10 @@ class LectureIdentity:
             v_norm = normalize_arabic_token(v)
             for token in list(seed_tokens):
                 if token == k_norm or token == v_norm or (len(token) >= 3 and (token in v_norm or v_norm in token)):
-                    kw_variants.add(k_norm)
-                    kw_variants.add(v_norm)
+                    if k_norm:
+                        kw_variants.add(k_norm)
+                    if v_norm:
+                        kw_variants.add(v_norm)
 
         # 2. Date-based matching (YYYY-MM-DD)
         if self.date and re.match(r'^\d{4}-\d{2}-\d{2}$', str(self.date)):
@@ -193,12 +194,12 @@ class LectureIdentity:
                 return True
             stem_rem = cleaned_cand.replace(str(self.date), " ").strip(" _-")
             norm_rem = normalize_arabic_token(stem_rem)
-            return any(v in norm_rem or norm_rem in v for v in kw_variants)
+            return bool(norm_rem) and any(v in norm_rem or norm_rem in v for v in kw_variants)
 
         # 3. Numbered stem matching
         target_num = self.lecture_number or (str(self.date) if self.date and str(self.date).isdigit() else None)
         if not target_num and self.stem:
-            stem_num_match = re.search(r'\b(\d+)\b', self.stem)
+            stem_num_match = re.search(r'(?<!\d)(\d+)(?!\d)', self.stem)
             if stem_num_match:
                 target_num = stem_num_match.group(1)
 
@@ -209,34 +210,16 @@ class LectureIdentity:
                 if not target_num or str(target_num) != n1:
                     return False
                 norm_mid = normalize_arabic_token(middle)
-                return any(v in norm_mid or norm_mid in v for v in kw_variants)
+                return bool(norm_mid) and any(v in norm_mid or norm_mid in v for v in kw_variants)
 
         # 4. Fallback: check if target_num and keyword variant appear in cleaned_cand
         if target_num:
-            cand_numbers = re.findall(r'\b\d+\b', cleaned_cand)
+            cand_numbers = re.findall(r'(?<!\d)\d+(?!\d)', cleaned_cand)
             if str(target_num) in cand_numbers:
                 norm_cand = normalize_arabic_token(cleaned_cand)
                 return any(v in norm_cand for v in kw_variants)
 
         return False
-
-    @classmethod
-    def from_metadata(
-        cls,
-        meta: dict | LectureIdentity,
-        routing_map: Mapping[str, str] | None = None,
-    ) -> LectureIdentity:
-        """Constructs LectureIdentity from metadata dict or existing instance."""
-        if isinstance(meta, LectureIdentity):
-            return meta
-        return cls(
-            date=meta.get("date"),
-            lecture_number=meta.get("lecture_number"),
-            keyword=meta.get("keyword"),
-            subject_name=meta.get("subject_name"),
-            audio_file=meta.get("audio_file"),
-            stem=meta.get("stem"),
-        )
 
     @classmethod
     def from_text(
@@ -249,42 +232,47 @@ class LectureIdentity:
         and lecture_number from markdown text, filenames, or raw transcript headers.
         """
         rm = routing_map if routing_map is not None else {}
-        identity = cls()
+        date: str | None = None
+        lecture_number: str | None = None
+        keyword: str | None = None
+        subject_name: str | None = None
+        audio_file: str | None = None
+        stem: str | None = None
 
         # 1. Date extraction (YYYY-MM-DD)
-        date_match = re.search(r'\b(\d{4}-\d{2}-\d{2})\b', text)
+        date_match = re.search(r'(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)', text)
         if date_match:
-            identity.date = date_match.group(1)
+            date = date_match.group(1)
 
         # 2. Lecture number from explicit label (المحاضرة: 17)
         lec_match = re.search(r'^(?:المحاضرة|محاضرة|الدرس|درس)\s*:\s*(\d+)', text, re.MULTILINE)
         if lec_match:
-            identity.lecture_number = lec_match.group(1).strip()
+            lecture_number = lec_match.group(1).strip()
 
         # 3. Audio file token extraction
-        audio_match = re.search(r'\b(\d{4}-\d{2}-\d{2}[ _]+[^\n\r]+?\.(?:mp3|m4a|wav|aac|ogg|opus))\b', text, re.IGNORECASE)
+        audio_match = re.search(r'(?<!\d)(\d{4}-\d{2}-\d{2}[ _]+[^\n\r]+?\.(?:mp3|m4a|wav|aac|ogg|opus))\b', text, re.IGNORECASE)
         if not audio_match:
             audio_match = re.search(r'\b([^\n\r]+?\.(?:mp3|m4a|wav|aac|ogg|opus))\b', text, re.IGNORECASE)
         if audio_match:
-            identity.audio_file = audio_match.group(1).strip()
+            audio_file = audio_match.group(1).strip()
 
         # 4. Mirrored numbered stem pattern (e.g. 17-فقه_البيوع_17 or 17-بيوع-17)
-        numbered_stem_match = re.search(r'\b(\d+)[-_]([^\s\d\n\r]+?)[-_](\d+)\b', text)
+        numbered_stem_match = re.search(r'(?<!\d)(\d+)[-_]([^\s\d\n\r]+?)[-_](\d+)(?!\d)', text)
         if numbered_stem_match:
             n1 = numbered_stem_match.group(1)
             stem_middle = numbered_stem_match.group(2).strip()
             n2 = numbered_stem_match.group(3)
             if n1 == n2:
-                identity.lecture_number = n1
-                identity.stem = f"{n1}-{stem_middle}_{n2}"
-                if not identity.keyword:
+                lecture_number = n1
+                stem = f"{n1}-{stem_middle}_{n2}"
+                if not keyword:
                     clean_middle = stem_middle.replace("_", " ").strip()
                     canonical_key, canonical_subj = match_canonical_subject(clean_middle, rm)
                     if canonical_key:
-                        identity.keyword = canonical_key
-                        identity.subject_name = canonical_subj
+                        keyword = canonical_key
+                        subject_name = canonical_subj
                     else:
-                        identity.keyword = clean_middle
+                        keyword = clean_middle
 
         # 5. Subject extraction from explicit label (المادة: ...)
         subject_match = re.search(r'^(?:اسم المادة|المادة)\s*:\s*([^\n\r]+)', text, re.MULTILINE)
@@ -293,37 +281,52 @@ class LectureIdentity:
             first_word = re.split(r'[\s(]', full_subject)[0].strip()
             norm_key = normalize_arabic(first_word)
             if norm_key in rm:
-                identity.keyword = first_word
-                identity.subject_name = rm[norm_key]
+                keyword = first_word
+                subject_name = rm[norm_key]
             else:
                 canonical_key, canonical_subj = match_canonical_subject(full_subject, rm)
                 if canonical_key:
-                    identity.keyword = canonical_key
-                    identity.subject_name = canonical_subj
+                    keyword = canonical_key
+                    subject_name = canonical_subj
                 else:
                     clean_sub = re.sub(r'\s*\([^)]*فصل[^)]*\)', '', full_subject).strip()
-                    identity.keyword = first_word
-                    identity.subject_name = clean_sub
+                    keyword = first_word
+                    subject_name = clean_sub
 
-        # 6. Filename token fallback if subject line not present
-        if not identity.keyword and identity.date:
-            file_token_match = re.search(r'\b\d{4}-\d{2}-\d{2}\s+([^\s.]+)(?:\.mp3|\.m4a|\.wav|\.aac|\.ogg)?', text)
-            if file_token_match:
-                identity.keyword = file_token_match.group(1).strip()
-                norm_key = normalize_arabic(identity.keyword)
-                if norm_key in rm:
-                    identity.subject_name = rm[norm_key]
+        # 6. Filename token fallback if subject line not present (same line only)
+        if not keyword and date:
+            rest_match = re.search(
+                rf'(?<!\d){re.escape(date)}[ _]+([^\n\r]+)',
+                text,
+            )
+            if rest_match:
+                rest_line = rest_match.group(1).strip()
+                canonical_key, canonical_subj = match_canonical_subject(rest_line, rm)
+                if canonical_key:
+                    keyword = canonical_key
+                    subject_name = canonical_subj
                 else:
-                    identity.subject_name = identity.keyword
+                    token_match = re.match(r'([^\s._]+)', rest_line)
+                    if token_match:
+                        keyword = token_match.group(1).strip()
+                        norm_key = normalize_arabic(keyword)
+                        subject_name = rm.get(norm_key, keyword)
 
         # 7. Reverse lookup from audio file if keyword still missing
-        if not identity.keyword and identity.audio_file:
-            canonical_key, canonical_subj = match_canonical_subject(identity.audio_file, rm)
+        if not keyword and audio_file:
+            canonical_key, canonical_subj = match_canonical_subject(audio_file, rm)
             if canonical_key:
-                identity.keyword = canonical_key
-                identity.subject_name = canonical_subj
+                keyword = canonical_key
+                subject_name = canonical_subj
 
-        return identity
+        return cls(
+            date=date,
+            lecture_number=lecture_number,
+            keyword=keyword,
+            subject_name=subject_name,
+            audio_file=audio_file,
+            stem=stem,
+        )
 
     @classmethod
     def from_filename(
@@ -334,10 +337,75 @@ class LectureIdentity:
     ) -> LectureIdentity:
         """Parses identity from a standalone filename."""
         cleaned = normalize_stem(filename)
-        identity = cls.from_text(cleaned, routing_map=routing_map)
-        identity.stem = cleaned
-        if fallback_subject and not identity.subject_name:
-            identity.subject_name = fallback_subject
-        if fallback_subject and not identity.keyword:
-            identity.keyword = fallback_subject
-        return identity
+        parsed = cls.from_text(cleaned, routing_map=routing_map)
+        subject_name = parsed.subject_name
+        keyword = parsed.keyword
+        if fallback_subject:
+            canonical_key, canonical_subj = match_canonical_subject(fallback_subject, routing_map)
+            if not subject_name:
+                subject_name = canonical_subj or fallback_subject
+            if not keyword:
+                keyword = canonical_key or fallback_subject
+        return replace(parsed, stem=cleaned, subject_name=subject_name, keyword=keyword)
+
+
+def resolve_document_identity(
+    markdown_text: str,
+    identity: LectureIdentity | None = None,
+    *,
+    path_identity: LectureIdentity | None = None,
+    routing_map: Mapping[str, str] | None = None,
+) -> LectureIdentity:
+    """
+    Parses transcript metadata and applies non-destructive merge precedence:
+    explicit override > path metadata > parsed transcript metadata.
+    When a higher-precedence layer provides a lecture_number without a date,
+    prioritizes numbered lecture formatting over parsed text dates without mutating instances.
+    """
+    resolved = LectureIdentity.from_text(markdown_text, routing_map=routing_map)
+    for layer in (path_identity, identity):
+        if layer is None:
+            continue
+        resolved = resolved.merge(layer)
+        if layer.lecture_number and not layer.date:
+            resolved = replace(resolved, date=None)
+    return resolved
+
+
+def standardize_transcript_header(
+    markdown_text: str,
+    identity: LectureIdentity | None = None,
+    *,
+    path_identity: LectureIdentity | None = None,
+    routing_map: Mapping[str, str] | None = None,
+) -> str:
+    """
+    Strips NotebookLM tags (Source guide, audio file names, etc.) and existing headers,
+    returning cleanly standardized markdown beginning with the 3-line centered header.
+    """
+    ident = resolve_document_identity(
+        markdown_text,
+        identity,
+        path_identity=path_identity,
+        routing_map=routing_map,
+    )
+    paragraphs = markdown_text.split('\n\n')
+    cleaned_paragraphs: list[str] = []
+
+    for para in paragraphs:
+        lines = [line.strip() for line in para.split('\n') if line.strip()]
+        if not lines:
+            continue
+        if all(is_header_line(l) for l in lines):
+            continue
+        while lines and is_header_line(lines[0]):
+            lines.pop(0)
+        if not lines:
+            continue
+        cleaned_paragraphs.append('\n'.join(lines))
+
+    body = '\n\n'.join(cleaned_paragraphs)
+    header = '\n'.join(ident.header_lines)
+    if body:
+        return f"{header}\n\n{body}"
+    return header
