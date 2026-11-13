@@ -1,13 +1,8 @@
 import unittest
-import sys
-from pathlib import Path
 
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from diff_inline_matn import (
-    classify_matn_diffs,
+from tafreegh.diff_inline_matn import (
     MatnDiffCategory,
+    classify_matn_diffs,
     format_matn_diff_report,
 )
 

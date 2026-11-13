@@ -1,15 +1,8 @@
 import unittest
-import sys
-from pathlib import Path
 
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from matn_matcher import (
-    SequentialMatnMatcher,
+from tafreegh.matn_matcher import (
     MatchMode,
-    strip_tashkeel,
-    normalize_arabic_search,
+    SequentialMatnMatcher,
     format_matn_segment,
     generate_fallback_summary,
 )
@@ -26,11 +19,6 @@ class TestMatnMatcher(unittest.TestCase):
             "وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"
         )
         self.matcher = SequentialMatnMatcher(self.sample_source, forward_lookahead=500)
-
-    def test_strip_tashkeel(self):
-        vowelized = "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ"
-        plain = strip_tashkeel(vowelized)
-        self.assertEqual(plain, "إن مبادئ كل علم عشره")
 
     def test_forward_search_advances_cursor(self):
         res1 = self.matcher.match_segment("ان مبادئ كل علم عشره")

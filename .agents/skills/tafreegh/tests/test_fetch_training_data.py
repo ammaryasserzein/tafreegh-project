@@ -1,14 +1,12 @@
-import unittest
-from unittest.mock import patch
-import sys
 import os
-from pathlib import Path
 import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-scripts_dir = Path(__file__).resolve().parent.parent / 'scripts'
-sys.path.insert(0, str(scripts_dir))
-import fetch_training_data
-import read_docx
+from tafreegh import fetch_training_data
+from tafreegh.lecture_identity import LectureIdentity
+
 
 class TestFetchTrainingData(unittest.TestCase):
     def setUp(self):
@@ -23,7 +21,7 @@ class TestFetchTrainingData(unittest.TestCase):
         os.makedirs(fetch_training_data.ONEDRIVE_BASE)
         os.makedirs(fetch_training_data.TRAINING_DATA_DIR)
         
-        self.mock_extract = patch('read_docx.extract_text').start()
+        self.mock_extract = patch('tafreegh.read_docx.extract_text').start()
         self.mock_extract.return_value = "**dummy text**"
         
     def tearDown(self):
@@ -85,7 +83,6 @@ class TestFetchTrainingData(unittest.TestCase):
         self.assertTrue(expected_md_path.exists(), "Numbered lecture markdown should be created as 17-فقه_البيوع_17.md")
 
         # 5. Direct test of _find_ai_baseline with LectureIdentity
-        from lecture_identity import LectureIdentity
         ident = LectureIdentity(lecture_number="17", stem="17-فقه_البيوع_17", keyword="بيوع")
         found = fetch_training_data._find_ai_baseline(identity=ident)
         self.assertEqual(found, ai_baseline_path)

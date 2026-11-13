@@ -9,9 +9,7 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 CANONICAL_SCRIPT = SCRIPTS_DIR / "chunk_transcript.py"
 
-sys.path.insert(0, str(SCRIPTS_DIR))
-
-import chunk_transcript
+from tafreegh import chunk_transcript
 
 
 def test_smart_chunk_text_empty_or_whitespace_returns_empty():

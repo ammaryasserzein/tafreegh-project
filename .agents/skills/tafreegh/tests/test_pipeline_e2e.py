@@ -10,10 +10,7 @@ from docx.oxml.ns import qn
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from export_docx import (
+from tafreegh.export_docx import (
     export_documents,
     find_matching_matn_source,
     interleave_matn_segments,

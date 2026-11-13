@@ -6,19 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .arabic_normalizer import normalize_arabic, normalize_arabic_token
+
 # Ensure UTF-8 output
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
-
-
-def normalize_arabic(text: str) -> str:
-    """Normalizes hamzas, wasl, and cleans leading/trailing whitespace."""
-    if not text:
-        return ""
-    t = text.strip()
-    t = re.sub(r'[أإآٱ]', 'ا', t)
-    t = re.sub(r'\s+', ' ', t)
-    return t.strip()
 
 
 def normalize_stem(candidate_name: str) -> str:
@@ -312,31 +304,24 @@ class LectureIdentity:
         if self.stem and normalize_stem(self.stem) == cleaned_cand:
             return True
 
-        def _normalize_token(t: str) -> str:
-            t = normalize_arabic(t)
-            t = re.sub(r'ة', 'ه', t)
-            t = re.sub(r'ى', 'ي', t)
-            t = re.sub(r'[_\s]+', ' ', t)
-            return t.strip()
-
         rm = routing_map if routing_map is not None else CANONICAL_ROUTING
 
         seed_tokens: set[str] = set()
         if self.keyword:
-            seed_tokens.add(_normalize_token(self.keyword))
+            seed_tokens.add(normalize_arabic_token(self.keyword))
         if self.subject_name:
-            norm_subj = _normalize_token(self.subject_name)
+            norm_subj = normalize_arabic_token(self.subject_name)
             if norm_subj:
                 seed_tokens.add(norm_subj)
             clean_sub = re.sub(r'\(.*?\)', '', self.subject_name).strip()
-            norm_clean = _normalize_token(clean_sub)
+            norm_clean = normalize_arabic_token(clean_sub)
             if norm_clean:
                 seed_tokens.add(norm_clean)
 
         kw_variants: set[str] = set(seed_tokens)
         for k, v in rm.items():
-            k_norm = _normalize_token(k)
-            v_norm = _normalize_token(v)
+            k_norm = normalize_arabic_token(k)
+            v_norm = normalize_arabic_token(v)
             for token in list(seed_tokens):
                 if token == k_norm or token == v_norm or (len(token) >= 3 and (token in v_norm or v_norm in token)):
                     kw_variants.add(k_norm)
@@ -349,7 +334,7 @@ class LectureIdentity:
             if not kw_variants:
                 return True
             stem_rem = cleaned_cand.replace(str(self.date), " ").strip(" _-")
-            norm_rem = _normalize_token(stem_rem)
+            norm_rem = normalize_arabic_token(stem_rem)
             return any(v in norm_rem or norm_rem in v for v in kw_variants)
 
         # 3. Numbered stem matching
@@ -365,14 +350,14 @@ class LectureIdentity:
             if n1 == n2:  # Mirrored stem
                 if not target_num or str(target_num) != n1:
                     return False
-                norm_mid = _normalize_token(middle)
+                norm_mid = normalize_arabic_token(middle)
                 return any(v in norm_mid or norm_mid in v for v in kw_variants)
 
         # 4. Fallback: check if target_num and keyword variant appear in cleaned_cand
         if target_num:
             cand_numbers = re.findall(r'\b\d+\b', cleaned_cand)
             if str(target_num) in cand_numbers:
-                norm_cand = _normalize_token(cleaned_cand)
+                norm_cand = normalize_arabic_token(cleaned_cand)
                 return any(v in norm_cand for v in kw_variants)
 
         return False

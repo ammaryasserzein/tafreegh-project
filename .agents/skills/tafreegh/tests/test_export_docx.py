@@ -10,33 +10,29 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-# Add scripts directory to sys.path
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from export_docx import (
-    get_onedrive_folder,
-    parse_metadata,
-    is_header_line,
-    standardize_transcript_header,
+from tafreegh.export_docx import (
+    CANONICAL_SUBJECT_NAMES,
+    DIALECT_MARKERS,
+    _extract_candidate_query,
+    _format_segment_output,
+    archive_processed_inputs,
     create_docx,
     export_documents,
     export_dual_copies,
-    archive_processed_inputs,
+    get_onedrive_folder,
+    is_header_line,
     is_matching_stem,
-    normalize_stem,
-    resolve_document_identity,
-    _extract_candidate_query,
-    _format_segment_output,
-    CANONICAL_SUBJECT_NAMES,
     load_dialect_markers,
-    DIALECT_MARKERS,
+    parse_metadata,
+    resolve_document_identity,
+    standardize_transcript_header,
 )
-from lecture_identity import (
+from tafreegh.lecture_identity import (
     LectureIdentity,
     load_canonical_routing,
+    normalize_stem,
 )
-from matn_matcher import MatnMatchResult, MatchMode
+from tafreegh.matn_matcher import MatchMode, MatnMatchResult
 
 class TestGetOneDriveFolder(unittest.TestCase):
     def setUp(self):

@@ -12,22 +12,19 @@ from docx.oxml.ns import qn
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from export_docx import create_docx
-from verify_docx import (
+from tafreegh.export_docx import create_docx
+from tafreegh.verify_docx import (
     BASE_EXEMPT_NAMES,
     BASE_KINSHIP_NOUNS,
     BASE_KUNYA_PREFIXES,
     BASE_TITLE_PREFIXES,
-    MatnAlignmentValidator,
-    _verify_exported_matn_segment,
-    verify_docx,
-    Severity,
-    load_dialect_replacements,
-    load_attendee_anonymization_rules,
     AttendeeAnonymizationRules,
+    MatnAlignmentValidator,
+    Severity,
+    _verify_exported_matn_segment,
+    load_attendee_anonymization_rules,
+    load_dialect_replacements,
+    verify_docx,
 )
 
 
@@ -975,7 +972,7 @@ class TestVerifyDocxCLI(unittest.TestCase):
 
 class TestMatnAlignmentValidator(unittest.TestCase):
     def setUp(self):
-        from matn_matcher import SequentialMatnMatcher
+        from tafreegh.matn_matcher import SequentialMatnMatcher
         self.SequentialMatnMatcher = SequentialMatnMatcher
         self.sample_source = (
             "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ ... "

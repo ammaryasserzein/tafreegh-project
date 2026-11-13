@@ -1,10 +1,8 @@
-import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
-
 import verify_repo
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def test_verify_repo_passes_on_current_repo():
     findings = verify_repo.run_all_checks()

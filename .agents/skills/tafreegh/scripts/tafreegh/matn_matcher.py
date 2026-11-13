@@ -15,6 +15,12 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+from .arabic_normalizer import (
+    build_search_index,
+    normalize_arabic_search,
+    strip_tashkeel_preserving_citations,
+)
+
 
 class MatchMode(str, Enum):
     PRIMARY = "primary"
@@ -37,35 +43,9 @@ class MatnMatchResult:
         return self.start_pos >= 0
 
 
-TASHKEEL_REGEX = re.compile(r'[\u064B-\u065F\u0670\u0640]')
 COMPOUND_SHARH_SPLIT_RE = re.compile(
     r"^(.+?(?:بقوله|في قوله|قوله)\s*[،:]\s*)(.+)$"
 )
-
-
-def strip_tashkeel(text: str) -> str:
-    """Removes Arabic diacritics and tatweel."""
-    return TASHKEEL_REGEX.sub('', text)
-
-
-def strip_tashkeel_preserving_citations(text: str) -> str:
-    """Removes Arabic diacritics from fallback text while preserving vowelized parenthesized citations (...) inside it."""
-    parts = re.split(r'(\([^)]+\))', text)
-    return "".join(
-        part if (part.startswith('(') and part.endswith(')')) else strip_tashkeel(part)
-        for part in parts
-    )
-
-
-def normalize_arabic_search(text: str) -> str:
-    """Normalizes Arabic text for tolerant substring matching."""
-    t = strip_tashkeel(text)
-    t = re.sub(r'[أإآٱ]', 'ا', t)
-    t = re.sub(r'ة', 'ه', t)
-    t = re.sub(r'ى', 'ي', t)
-    t = re.sub(r'[^\w\s]', ' ', t)
-    t = re.sub(r'\s+', ' ', t)
-    return t.strip()
 
 
 class SequentialMatnMatcher:
@@ -77,51 +57,14 @@ class SequentialMatnMatcher:
         self._active_norm_pos = 0
         self.history: list[MatnMatchResult] = []
 
-        # Build position mapping from normalized characters back to source indices
-        self.norm_chars: list[str] = []
-        self.pos_map: list[int] = []
-        prev_was_space = False
-
-        for idx, ch in enumerate(self.source):
-            if TASHKEEL_REGEX.match(ch):
-                continue
-
-            norm_c = ch
-            if norm_c in 'أإآٱ':
-                norm_c = 'ا'
-            elif norm_c == 'ة':
-                norm_c = 'ه'
-            elif norm_c == 'ى':
-                norm_c = 'ي'
-            elif re.match(r'[^\w\s]', norm_c) or norm_c.isspace():
-                norm_c = ' '
-
-            if norm_c == ' ':
-                if not prev_was_space and self.norm_chars:
-                    self.norm_chars.append(' ')
-                    self.pos_map.append(idx)
-                    prev_was_space = True
-            else:
-                self.norm_chars.append(norm_c)
-                self.pos_map.append(idx)
-                prev_was_space = False
-
-        # Strip trailing space if any
-        if self.norm_chars and self.norm_chars[-1] == ' ':
-            self.norm_chars.pop()
-            self.pos_map.pop()
-
-        self.norm_source = "".join(self.norm_chars)
+        self._search_index = build_search_index(self.source)
+        self.norm_source = self._search_index.normalized
+        self.pos_map = self._search_index.pos_map
         self._collapsed_source = re.sub(r"\s+", " ", self.source).strip()
 
     def _extract_original_slice(self, norm_start: int, norm_end: int) -> tuple[int, int, str]:
         """Calculates exact coordinates and extracts original slice preserving tashkeel and punctuation."""
-        orig_start = self.pos_map[norm_start]
-        last_char_idx = self.pos_map[norm_end - 1]
-        orig_end = last_char_idx + 1
-        while orig_end < len(self.source) and TASHKEEL_REGEX.match(self.source[orig_end]):
-            orig_end += 1
-        return orig_start, orig_end, self.source[orig_start:orig_end]
+        return self._search_index.extract_span(norm_start, norm_end)
 
     def _record_anchored_match(
         self,

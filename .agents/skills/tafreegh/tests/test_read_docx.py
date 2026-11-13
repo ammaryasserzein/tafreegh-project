@@ -1,16 +1,11 @@
 import unittest
 from unittest.mock import patch, MagicMock
-import sys
-from pathlib import Path
 
-# Add scripts to path so we can import read_docx
-scripts_dir = Path(__file__).resolve().parent.parent / 'scripts'
-sys.path.insert(0, str(scripts_dir))
-import read_docx
+from tafreegh import read_docx
 
 class TestReadDocx(unittest.TestCase):
     def setUp(self):
-        self.mock_zip = patch('read_docx.zipfile.ZipFile').start()
+        self.mock_zip = patch('tafreegh.read_docx.zipfile.ZipFile').start()
         self.mock_z = MagicMock()
         self.mock_zip.return_value.__enter__.return_value = self.mock_z
 
