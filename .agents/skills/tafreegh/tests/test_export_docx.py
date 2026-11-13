@@ -15,10 +15,10 @@ from tafreegh.export_docx import (
     _extract_candidate_query,
     _format_segment_output,
     archive_processed_inputs,
-    create_docx,
     export_documents,
     export_dual_copies,
 )
+from tafreegh.word_gateway import create_docx
 from tafreegh.lecture_identity import (
     NOTEBOOKLM_HEADER_PATTERNS,
     LectureIdentity,

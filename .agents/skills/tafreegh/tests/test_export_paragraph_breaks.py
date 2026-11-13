@@ -10,7 +10,7 @@ from pathlib import Path
 import docx
 from docx.oxml.ns import qn
 
-from tafreegh.export_docx import create_docx
+from tafreegh.word_gateway import create_docx
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")

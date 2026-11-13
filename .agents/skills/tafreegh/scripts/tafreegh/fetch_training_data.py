@@ -7,9 +7,9 @@ import re
 import sys
 from pathlib import Path
 
-from . import read_docx
 from .diff_cues import CueResult, detect_new_student_cues, format_cue_report
 from .lecture_identity import LectureIdentity
+from .word_gateway import DocxArchiveError, extract_text
 from .workspace_catalog import RuleCatalog, WorkspaceConfig, resolve_runtime_context
 
 
@@ -135,9 +135,10 @@ def main(
             continue
 
         # Extract text
-        text = read_docx.extract_text(docx_path)
-        if text.startswith("Error reading docx:"):
-            print(f"Failed to read {docx_path}: {text}")
+        try:
+            text = extract_text(docx_path)
+        except DocxArchiveError as exc:
+            print(f"Failed to read {docx_path}: {exc}")
             continue
 
         # Write to md file

@@ -12,7 +12,7 @@ from docx.oxml.ns import qn
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-from tafreegh.export_docx import create_docx
+from tafreegh.word_gateway import DocxArchiveError, create_docx
 from tafreegh.verify_docx import (
     MatnAlignmentValidator,
     Severity,
@@ -1026,6 +1026,26 @@ class TestVerifyDocxCLI(unittest.TestCase):
             data_bad = json.loads(proc_bad.stdout)
             self.assertFalse(data_bad["passed"])
             self.assertGreater(data_bad["error_count"], 0)
+
+    def test_corrupt_docx_raises_docx_archive_error_and_cli_exits_2(self):
+        import subprocess
+
+        script_path = Path(__file__).parent.parent / "scripts" / "verify_docx.py"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            corrupt_docx = Path(tmpdir) / "corrupt.docx"
+            corrupt_docx.write_text("not a valid zip", encoding="utf-8")
+
+            with self.assertRaises(DocxArchiveError):
+                verify_docx(corrupt_docx)
+
+            proc = subprocess.run(
+                [sys.executable, str(script_path), str(corrupt_docx), "--json"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("Error:", proc.stderr)
 
 
 

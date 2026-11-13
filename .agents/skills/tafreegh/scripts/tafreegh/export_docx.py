@@ -5,13 +5,8 @@ import re
 import shutil
 from pathlib import Path
 from dataclasses import dataclass
-import docx
-from docx.shared import Pt, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
 
-from . import lecture_identity
+from . import lecture_identity, word_gateway
 from .arabic_normalizer import normalize_arabic
 from .lecture_identity import LectureIdentity
 from .matn_matcher import (
@@ -25,195 +20,6 @@ from .workspace_catalog import RuleCatalog, WorkspaceConfig, resolve_runtime_con
 # Ensure UTF-8 output
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
-
-DEFAULT_FONT_NAME = "Traditional Arabic"
-DEFAULT_FONT_SIZE = 18
-
-
-def set_p_rtl(p, align=None):
-    """Configures paragraph with proper RTL and language attributes."""
-    pPr = p._p.get_or_add_pPr()
-    if pPr.find(qn('w:bidi')) is None:
-        pPr.append(OxmlElement('w:bidi'))
-    if align:
-        jc = pPr.find(qn('w:jc'))
-        if jc is None:
-            jc = OxmlElement('w:jc')
-            pPr.append(jc)
-        jc.set(qn('w:val'), align)
-        
-    p_rPr = pPr.find(qn('w:rPr'))
-    if p_rPr is None:
-        p_rPr = OxmlElement('w:rPr')
-        pPr.append(p_rPr)
-    if p_rPr.find(qn('w:rtl')) is None:
-        p_rPr.append(OxmlElement('w:rtl'))
-    lang = p_rPr.find(qn('w:lang'))
-    if lang is None:
-        lang = OxmlElement('w:lang')
-        p_rPr.append(lang)
-    lang.set(qn('w:bidi'), "ar-SA")
-
-
-def set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False):
-    """Applies Arabic font, size, RTL flag, bidi language, and bold styling (w:b + w:bCs). Strictly black color."""
-    run.font.name = font_name
-    run.font.size = Pt(size_pt)
-    rPr = run._r.get_or_add_rPr()
-    
-    # RTL attribute
-    if rPr.find(qn('w:rtl')) is None:
-        rPr.append(OxmlElement('w:rtl'))
-        
-    # Complex script fonts
-    rFonts = rPr.find(qn('w:rFonts'))
-    if rFonts is None:
-        rFonts = OxmlElement('w:rFonts')
-        rPr.append(rFonts)
-    rFonts.set(qn('w:cs'), font_name)
-    rFonts.set(qn('w:ascii'), font_name)
-    rFonts.set(qn('w:hAnsi'), font_name)
-    
-    # Language
-    lang = rPr.find(qn('w:lang'))
-    if lang is None:
-        lang = OxmlElement('w:lang')
-        rPr.append(lang)
-    lang.set(qn('w:bidi'), "ar-SA")
-    
-    # Bold handling: BOTH w:b and w:bCs are strictly required for Word to render Arabic bold!
-    if bold:
-        run.bold = True
-        if rPr.find(qn('w:bCs')) is None:
-            rPr.append(OxmlElement('w:bCs'))
-    else:
-        run.bold = False
-        bCs = rPr.find(qn('w:bCs'))
-        if bCs is not None:
-            rPr.remove(bCs)
-
-
-def _strip_hybrid_summary(markdown_text: str) -> str:
-    """Strips the Dynamic Fallback Interleaving summary block from markdown text if present."""
-    if "### تقرير المتن الهجين" in markdown_text:
-        return markdown_text.split("### تقرير المتن الهجين")[0].strip()
-    return markdown_text
-
-
-def create_docx(
-    markdown_text: str,
-    output_path: Path,
-    template_path: Path | None = None,
-    identity: LectureIdentity | None = None,
-    *,
-    workspace: WorkspaceConfig | None = None,
-    catalog: RuleCatalog | None = None,
-) -> Path:
-    """
-    Converts scholarly transcription markdown into a formatted .docx document.
-    Inherits formatting from Word base.docx if available, with 0.5in margins,
-    Traditional Arabic 18pt font, black color, bold matn tags (w:bCs), and centered headers.
-    Generates one Word paragraph (^p) per line for seamless Ctrl+Down navigation.
-    """
-    import re
-    # Targeted sanitization: strip backticks only if they wrap Arabic text to prevent markdown leakage,
-    # while preserving valid backticks around English terms/code per global rules.
-    markdown_text = re.sub(r'`([^`]*[\u0600-\u06FF]+[^`]*)`', r'\1', markdown_text)
-    markdown_text = _strip_hybrid_summary(markdown_text)
-
-    active_workspace, active_catalog = resolve_runtime_context(
-        workspace=workspace,
-        catalog=catalog,
-    )
-    resolved_template = (
-        Path(template_path)
-        if template_path is not None
-        else active_workspace.word_base_template
-    )
-    if resolved_template and resolved_template.exists():
-        doc = docx.Document(str(resolved_template))
-        p_elements = doc._body._element.xpath('./w:p')
-        for p in p_elements:
-            doc._body._element.remove(p)
-    else:
-        doc = docx.Document()
-    
-    for s in doc.sections:
-        s.top_margin = Inches(0.5)
-        s.bottom_margin = Inches(0.5)
-        s.left_margin = Inches(0.5)
-        s.right_margin = Inches(0.5)
-        
-    ident = lecture_identity.resolve_document_identity(
-        markdown_text,
-        identity,
-        routing_map=active_catalog.routing_map,
-    )
-    for header_line in ident.header_lines:
-        p_hdr = doc.add_paragraph()
-        set_p_rtl(p_hdr, align='center')
-        r_hdr = p_hdr.add_run(header_line)
-        set_run_font(r_hdr, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
-
-    for lines in lecture_identity.strip_header_blocks(markdown_text):
-        cleaned_para = '\n'.join(lines)
-
-        # Check if the entire paragraph is a standalone Matn block (even if multiline)
-        para_matn_match = re.match(r'^\*\*(.+)\*\*$', cleaned_para, re.DOTALL)
-        if para_matn_match and not re.search(r'\*\*[^*]+\*\*', para_matn_match.group(1)):
-            p = doc.add_paragraph()
-            set_p_rtl(p, align=None)
-            matn_content = " ".join(l.strip() for l in para_matn_match.group(1).split('\n') if l.strip())
-            run = p.add_run(matn_content)
-            set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=True)
-            continue
-            
-        # One Word paragraph (^p) per line, never manual line break (^l)
-        for line in lines:
-            # Skip HTML comments like <!-- fallback --> in Word output
-            if line.startswith("<!--") and line.endswith("-->"):
-                continue
-
-            line = re.sub(r'<!--.*?-->\s*', '', line).strip()
-            if not line:
-                continue
-
-            matn_full_match = re.match(r'^\*\*(.+)\*\*$', line)
-            if matn_full_match:
-                p = doc.add_paragraph()
-                set_p_rtl(p, align=None)
-                matn_content = matn_full_match.group(1)
-                run = p.add_run(matn_content)
-                set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=True)
-                continue
-
-            p = doc.add_paragraph()
-            set_p_rtl(p, align=None)
-
-            # Mixed line with inline **(...)**
-            parts = re.split(r'(\*\*[^*]+\*\*)', line)
-            for part in parts:
-                if not part:
-                    continue
-                if part.startswith('**') and part.endswith('**'):
-                    inner_text = part[2:-2]
-                    run = p.add_run(inner_text)
-                    set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
-                elif part.startswith('طالب:'):
-                    run_label = p.add_run('طالب: ')
-                    set_run_font(run_label, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
-                    rest_text = part[len('طالب:'):].strip()
-                    if rest_text:
-                        run_rest = p.add_run(rest_text)
-                        set_run_font(run_rest, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
-                else:
-                    run = p.add_run(part)
-                    set_run_font(run, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
-                    
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    doc.save(str(output_path))
-    return output_path
 
 
 def format_thousands(text: str) -> str:
@@ -335,15 +141,6 @@ def find_matching_matn_source(
                 return item
 
     return None
-
-
-def read_matn_source_content(path: Path) -> str:
-    """Reads matn source from .docx or text/markdown."""
-    path = Path(path)
-    if path.suffix.lower() == ".docx":
-        doc = docx.Document(str(path))
-        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-    return path.read_text(encoding="utf-8")
 
 
 @dataclass
@@ -553,7 +350,7 @@ def export_documents(
         project_root=project_root,
         onedrive_base=base_onedrive,
     )
-    markdown_text = _strip_hybrid_summary(markdown_text)
+    markdown_text = word_gateway.strip_hybrid_summary(markdown_text)
     path_ident = (
         LectureIdentity.from_filename(
             Path(original_md_path).name,
@@ -582,7 +379,7 @@ def export_documents(
     )
     matcher = None
     if target_matn_file and Path(target_matn_file).exists():
-        matn_content = read_matn_source_content(target_matn_file)
+        matn_content = word_gateway.read_matn_source_content(target_matn_file)
         matcher = SequentialMatnMatcher(matn_content)
         clean_md = interleave_matn_segments(clean_md, matcher, catalog=active_catalog)
 
@@ -609,7 +406,7 @@ def export_documents(
             onedrive_file = onedrive_file.with_name(f"{base_stem} ({counter}){onedrive_file.suffix}")
             counter += 1
 
-    create_docx(
+    word_gateway.create_docx(
         clean_md,
         onedrive_file,
         identity=ident,
@@ -677,14 +474,18 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     content = args.md_path.read_text(encoding="utf-8")
-    results = export_documents(
-        content,
-        args.md_path,
-        keyword=args.keyword,
-        date=args.date,
-        matn_source_path=args.matn_source_path,
-        overwrite=args.overwrite,
-    )
+    try:
+        results = export_documents(
+            content,
+            args.md_path,
+            keyword=args.keyword,
+            date=args.date,
+            matn_source_path=args.matn_source_path,
+            overwrite=args.overwrite,
+        )
+    except word_gateway.DocxArchiveError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     print(f"✓ OneDrive docx exported: {results['onedrive_file']}")
     print(f"✓ Project baseline MD saved: {results['project_file']}")
     if results.get("archived"):

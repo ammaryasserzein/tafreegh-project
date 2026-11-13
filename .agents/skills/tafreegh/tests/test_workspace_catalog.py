@@ -327,6 +327,7 @@ modules = [
     "tafreegh.lecture_identity",
     "tafreegh.matn_matcher",
     "tafreegh.read_docx",
+    "tafreegh.word_gateway",
     "tafreegh.export_docx",
     "tafreegh.verify_docx",
     "tafreegh.fetch_training_data",
@@ -379,6 +380,13 @@ assert recorded == [], f"Unexpected import-time filesystem I/O: {recorded}"
             "resolve_document_identity",
             "standardize_transcript_header",
             "is_matching_stem",
+            "DEFAULT_FONT_NAME",
+            "DEFAULT_FONT_SIZE",
+            "set_p_rtl",
+            "set_run_font",
+            "_strip_hybrid_summary",
+            "read_matn_source_content",
+            "create_docx",
         ):
             assert not hasattr(export_docx, attr)
         for attr in (
@@ -395,6 +403,10 @@ assert recorded == [], f"Unexpected import-time filesystem I/O: {recorded}"
             "BASE_TITLE_PREFIXES",
             "BASE_KNOWN_ATTENDEE_NAMES",
             "BASE_EXEMPT_NAMES",
+            "docx",
+            "qn",
+            "_is_run_bold",
+            "_is_centered",
         ):
             assert not hasattr(verify_docx, attr)
         for attr in (

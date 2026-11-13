@@ -5,8 +5,6 @@ import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-import docx
-from docx.oxml.ns import qn
 
 from .arabic_normalizer import (
     has_tashkeel,
@@ -15,16 +13,22 @@ from .arabic_normalizer import (
     strip_tashkeel,
     strip_tashkeel_preserving_citations,
 )
-from .export_docx import (
-    DEFAULT_FONT_NAME,
-    DEFAULT_FONT_SIZE,
-    read_matn_source_content,
-)
 from .lecture_identity import NOTEBOOKLM_HEADER_PATTERNS, LectureIdentity
 from .matn_matcher import (
     COMPOUND_SHARH_SPLIT_RE,
     MatchMode,
     SequentialMatnMatcher,
+)
+from .word_gateway import (
+    DEFAULT_BIDI_LANG,
+    DEFAULT_FONT_NAME,
+    DEFAULT_FONT_SIZE,
+    DEFAULT_MARGIN_INCHES,
+    MARGIN_TOLERANCE_INCHES,
+    DocxArchiveError,
+    InspectedDocument,
+    inspect_docx,
+    read_matn_source_content,
 )
 from .workspace_catalog import RuleCatalog, WorkspaceConfig, resolve_runtime_context
 
@@ -119,25 +123,6 @@ def _flag(
     )
 
 
-def _is_run_bold(r) -> tuple[bool, bool, bool]:
-    """Returns (is_bold, has_b, has_bCs)."""
-    rPr = r._r.find(qn("w:rPr"))
-    has_b = False
-    has_bCs = False
-    if rPr is not None:
-        b = rPr.find(qn("w:b"))
-        if b is not None:
-            val = b.get(qn("w:val"))
-            if val not in ("0", "false", "False", "off"):
-                has_b = True
-        bCs = rPr.find(qn("w:bCs"))
-        if bCs is not None:
-            val = bCs.get(qn("w:val"))
-            if val not in ("0", "false", "False", "off"):
-                has_bCs = True
-    return (has_b or has_bCs or bool(r.bold)), has_b or bool(r.bold), has_bCs
-
-
 def _is_matn_paragraph(p_idx: int, p_text: str, any_bold: bool, all_bold: bool) -> bool:
     """A valid Matn paragraph is in body (p_idx >= HEADER_LINE_COUNT), enclosed in (...), and fully bold."""
     stripped = p_text.strip()
@@ -146,38 +131,44 @@ def _is_matn_paragraph(p_idx: int, p_text: str, any_bold: bool, all_bold: bool) 
     return any_bold and all_bold and stripped.startswith("(") and stripped.endswith(")")
 
 
-def _check_ooxml_styling(doc: docx.Document, report: ValidationReport) -> list[ParagraphRecord]:
-    """Checks section margins, paragraph RTL, run fonts/sizes/colors/bold/breaks."""
-    for s_idx, section in enumerate(doc.sections):
+def _check_ooxml_styling(doc_info: InspectedDocument, report: ValidationReport) -> list[ParagraphRecord]:
+    """Checks section margins, paragraph RTL, run fonts/sizes/colors/bold/breaks via Word OOXML Gateway."""
+    for section in doc_info.sections:
         for side_name, margin_val in (
-            ("top", section.top_margin),
-            ("bottom", section.bottom_margin),
-            ("left", section.left_margin),
-            ("right", section.right_margin),
+            ("top", section.top_inches),
+            ("bottom", section.bottom_inches),
+            ("left", section.left_inches),
+            ("right", section.right_inches),
         ):
-            if margin_val is None or abs(margin_val.inches - 0.5) > 0.02:
-                actual = f"{margin_val.inches:.2f}" if margin_val is not None else "None"
+            if margin_val is None or abs(margin_val - DEFAULT_MARGIN_INCHES) > MARGIN_TOLERANCE_INCHES:
+                actual = f"{margin_val:.2f}" if margin_val is not None else "None"
                 _flag(
                     report,
                     "MARGIN_INVALID",
                     None,
-                    f"Section {s_idx} {side_name} margin is {actual}in (expected 0.50in).",
+                    (
+                        f"Section {section.section_index} {side_name} margin is {actual}in "
+                        f"(expected {DEFAULT_MARGIN_INCHES:.2f}in)."
+                    ),
                 )
 
     para_records: list[ParagraphRecord] = []
-    report.total_paragraphs = len(doc.paragraphs)
+    report.total_paragraphs = len(doc_info.paragraphs)
 
-    for p_idx, p in enumerate(doc.paragraphs):
+    for p in doc_info.paragraphs:
+        p_idx = p.index
         p_text = p.text
         stripped = p_text.strip()
 
-        br_nodes = p._p.findall(".//" + qn("w:br"))
-        if br_nodes:
+        if p.manual_line_break_count:
             _flag(
                 report,
                 "MANUAL_LINE_BREAK",
                 p_idx,
-                f"Paragraph P{p_idx} contains {len(br_nodes)} manual line break(s) (<w:br/>); use native paragraphs.",
+                (
+                    f"Paragraph P{p_idx} contains {p.manual_line_break_count} manual line break(s) "
+                    "(<w:br/>); use native paragraphs."
+                ),
                 stripped[:80],
             )
 
@@ -185,9 +176,7 @@ def _check_ooxml_styling(doc: docx.Document, report: ValidationReport) -> list[P
             para_records.append(ParagraphRecord(p_idx, p_text, False))
             continue
 
-        pPr = p._p.find(qn("w:pPr"))
-        has_bidi = pPr is not None and pPr.find(qn("w:bidi")) is not None
-        if not has_bidi:
+        if not p.has_bidi:
             _flag(
                 report,
                 "PARAGRAPH_RTL_MISSING",
@@ -197,50 +186,39 @@ def _check_ooxml_styling(doc: docx.Document, report: ValidationReport) -> list[P
             )
 
         non_empty_runs = [r for r in p.runs if r.text and r.text.strip()]
-        run_bold_states = []
-
         for r in non_empty_runs:
-            is_bold, has_b, has_bCs = _is_run_bold(r)
-            run_bold_states.append((r, is_bold, has_b, has_bCs))
-
-            rPr = r._r.find(qn("w:rPr"))
-            font_name = r.font.name
-            if rPr is not None and not font_name:
-                rFonts = rPr.find(qn("w:rFonts"))
-                if rFonts is not None:
-                    font_name = rFonts.get(qn("w:cs")) or rFonts.get(qn("w:ascii"))
-            if font_name != DEFAULT_FONT_NAME:
+            if r.font_name != DEFAULT_FONT_NAME:
                 _flag(
                     report,
                     "FONT_NAME_INVALID",
                     p_idx,
-                    f"Paragraph P{p_idx} run has font '{font_name}' (expected '{DEFAULT_FONT_NAME}').",
+                    f"Paragraph P{p_idx} run has font '{r.font_name}' (expected '{DEFAULT_FONT_NAME}').",
                     r.text[:60],
                 )
 
-            size_pt = r.font.size.pt if r.font.size is not None else None
-            if size_pt is None or abs(size_pt - float(DEFAULT_FONT_SIZE)) > 0.1:
+            if r.font_size_pt is None or abs(r.font_size_pt - float(DEFAULT_FONT_SIZE)) > 0.1:
                 _flag(
                     report,
                     "FONT_SIZE_INVALID",
                     p_idx,
-                    f"Paragraph P{p_idx} run has font size {size_pt}pt (expected {float(DEFAULT_FONT_SIZE):.1f}pt).",
+                    (
+                        f"Paragraph P{p_idx} run has font size {r.font_size_pt}pt "
+                        f"(expected {float(DEFAULT_FONT_SIZE):.1f}pt)."
+                    ),
                     r.text[:60],
                 )
 
-            if rPr is not None:
-                color_el = rPr.find(qn("w:color"))
-                if color_el is not None:
-                    val = color_el.get(qn("w:val"))
-                    if val and val.lower() not in ("auto", "000000"):
+            if r.has_rpr:
+                if r.has_color_element:
+                    if r.color_val and r.color_val.lower() not in ("auto", "000000"):
                         _flag(
                             report,
                             "FONT_COLOR_FORBIDDEN",
                             p_idx,
-                            f"Paragraph P{p_idx} run has inline color '{val}' (must inherit default black).",
+                            f"Paragraph P{p_idx} run has inline color '{r.color_val}' (must inherit default black).",
                             r.text[:60],
                         )
-                    elif val is not None:
+                    elif r.color_val is not None:
                         _flag(
                             report,
                             "FONT_COLOR_FORBIDDEN",
@@ -249,7 +227,7 @@ def _check_ooxml_styling(doc: docx.Document, report: ValidationReport) -> list[P
                             r.text[:60],
                         )
 
-                if rPr.find(qn("w:rtl")) is None:
+                if not r.has_rtl:
                     _flag(
                         report,
                         "RUN_RTL_MISSING",
@@ -257,18 +235,17 @@ def _check_ooxml_styling(doc: docx.Document, report: ValidationReport) -> list[P
                         f"Paragraph P{p_idx} run is missing <w:rtl/>.",
                         r.text[:60],
                     )
-                lang_el = rPr.find(qn("w:lang"))
-                if lang_el is None or lang_el.get(qn("w:bidi")) != "ar-SA":
+                if r.bidi_lang != DEFAULT_BIDI_LANG:
                     _flag(
                         report,
                         "RUN_LANG_MISSING",
                         p_idx,
-                        f"Paragraph P{p_idx} run is missing w:lang w:bidi='ar-SA'.",
+                        f"Paragraph P{p_idx} run is missing w:lang w:bidi='{DEFAULT_BIDI_LANG}'.",
                         r.text[:60],
                     )
 
-        any_bold = any(b[1] for b in run_bold_states)
-        all_bold = bool(run_bold_states) and all(b[1] for b in run_bold_states)
+        any_bold = any(r.is_bold for r in non_empty_runs)
+        all_bold = bool(non_empty_runs) and all(r.is_bold for r in non_empty_runs)
         is_matn = _is_matn_paragraph(p_idx, p_text, any_bold, all_bold)
 
         if p_idx < HEADER_LINE_COUNT and any_bold:
@@ -289,8 +266,8 @@ def _check_ooxml_styling(doc: docx.Document, report: ValidationReport) -> list[P
                     stripped[:80],
                 )
             else:
-                for r, is_b, has_b, has_bCs in run_bold_states:
-                    if is_b and (not has_b or not has_bCs):
+                for r in non_empty_runs:
+                    if r.is_bold and (not r.has_b or not r.has_b_cs):
                         _flag(
                             report,
                             "MATN_BOLD_CS_MISSING",
@@ -318,15 +295,6 @@ LEAKED_METADATA_PATTERNS = [
     re.compile(r"<!--.*?-->"),
     re.compile(r"تقرير المتن الهجين"),
 ]
-
-
-def _is_centered(p) -> bool:
-    pPr = p._p.find(qn("w:pPr"))
-    if pPr is not None:
-        jc = pPr.find(qn("w:jc"))
-        if jc is not None and jc.get(qn("w:val")) == "center":
-            return True
-    return False
 
 
 def _has_illegal_asterisk(stripped: str, is_matn: bool) -> bool:
@@ -359,12 +327,12 @@ def _has_illegal_asterisk(stripped: str, is_matn: bool) -> bool:
 
 
 def _check_headers_and_conclusion(
-    doc: docx.Document,
+    doc_info: InspectedDocument,
     para_records: list[ParagraphRecord],
     report: ValidationReport,
     catalog: RuleCatalog,
 ) -> None:
-    if len(doc.paragraphs) <= HEADER_LINE_COUNT:
+    if len(doc_info.paragraphs) <= HEADER_LINE_COUNT:
         _flag(
             report,
             "DOCUMENT_TOO_SHORT",
@@ -374,16 +342,16 @@ def _check_headers_and_conclusion(
         return
 
     for h_idx in range(HEADER_LINE_COUNT):
-        if not _is_centered(doc.paragraphs[h_idx]):
+        if not doc_info.paragraphs[h_idx].is_centered:
             _flag(
                 report,
                 "HEADER_ALIGN_INVALID",
                 h_idx,
                 f"Header paragraph P{h_idx} must be center-aligned.",
-                doc.paragraphs[h_idx].text.strip()[:60],
+                doc_info.paragraphs[h_idx].text.strip()[:60],
             )
 
-    p0_text = doc.paragraphs[0].text.strip()
+    p0_text = doc_info.paragraphs[0].text.strip()
     if p0_text != "بسم الله الرحمن الرحيم":
         _flag(
             report,
@@ -393,7 +361,7 @@ def _check_headers_and_conclusion(
             p0_text[:60],
         )
 
-    p1_text = doc.paragraphs[1].text.strip()
+    p1_text = doc_info.paragraphs[1].text.strip()
     canonical_subjects = catalog.canonical_subjects
     if not p1_text.startswith("المادة: "):
         _flag(
@@ -414,7 +382,7 @@ def _check_headers_and_conclusion(
                 p1_text[:60],
             )
 
-    p2_text = doc.paragraphs[2].text.strip()
+    p2_text = doc_info.paragraphs[2].text.strip()
     p2_ident = LectureIdentity.from_text(p2_text, routing_map=catalog.routing_map)
     normalized_p2 = re.sub(r"\s+", " ", p2_text)
     if not ((p2_ident.date or p2_ident.lecture_number) and p2_ident.header_line_3 == normalized_p2):
@@ -999,7 +967,7 @@ def verify_docx(
 ) -> ValidationReport:
     docx_path = Path(docx_path)
     report = ValidationReport(docx_path=str(docx_path))
-    doc = docx.Document(str(docx_path))
+    doc_info = inspect_docx(docx_path)
 
     _, active_catalog = resolve_runtime_context(
         workspace=workspace,
@@ -1008,8 +976,8 @@ def verify_docx(
         dialect_rules_path=dialect_rules_path,
     )
 
-    para_records = _check_ooxml_styling(doc, report)
-    _check_headers_and_conclusion(doc, para_records, report, catalog=active_catalog)
+    para_records = _check_ooxml_styling(doc_info, report)
+    _check_headers_and_conclusion(doc_info, para_records, report, catalog=active_catalog)
     _check_punctuation_and_orthography(para_records, report)
     _check_dialect_and_dialogue(para_records, report, catalog=active_catalog)
     _check_unbolded_fallback_matn(
@@ -1060,12 +1028,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: File not found: {args.docx_path}", file=sys.stderr)
         return 2
 
-    report = verify_docx(
-        docx_path=args.docx_path,
-        raw_path=args.raw,
-        matn_path=args.matn,
-        context_path=args.context,
-    )
+    try:
+        report = verify_docx(
+            docx_path=args.docx_path,
+            raw_path=args.raw,
+            matn_path=args.matn,
+            context_path=args.context,
+        )
+    except DocxArchiveError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
 
     if args.json:
         print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
