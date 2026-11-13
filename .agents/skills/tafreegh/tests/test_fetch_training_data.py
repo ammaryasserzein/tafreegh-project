@@ -1,4 +1,6 @@
+import contextlib
 import datetime
+import io
 import os
 import tempfile
 import unittest
@@ -101,14 +103,34 @@ class TestFetchTrainingData(unittest.TestCase):
 
         os.makedirs(self.workspace.ai_outputs_dir, exist_ok=True)
         ai_baseline_path = self.workspace.ai_outputs_dir / f"{expected_date}_رياض_الصالحين_AI.md"
-        ai_baseline_path.write_text("الحمد لله\nنعم؟\nطالب: صوت غير مسموع.", encoding="utf-8")
+        ai_baseline_path.write_text("الحمد لله\nفصل جديد في العلم.", encoding="utf-8")
+        self.mock_extract.return_value = "الحمد لله\nفصل جديد في العلم.\nطالب: صوت غير مسموع."
 
-        rc = fetch_training_data.main(workspace=self.workspace)
+        stdout_buf = io.StringIO()
+        with (
+            patch.object(
+                fetch_training_data,
+                "_find_ai_baseline",
+                wraps=fetch_training_data._find_ai_baseline,
+            ) as spy_find_baseline,
+            contextlib.redirect_stdout(stdout_buf),
+        ):
+            rc = fetch_training_data.main(workspace=self.workspace)
+
         self.assertEqual(rc, 0)
+        spy_find_baseline.assert_called_once()
+        passed_identity = spy_find_baseline.call_args.kwargs["identity"]
+        self.assertEqual(passed_identity.date, expected_date)
+        output = stdout_buf.getvalue()
+        self.assertIn(f"from diff with {ai_baseline_path.name}", output)
+        self.assertNotIn("No AI baseline", output)
 
         expected_md_path = self.workspace.training_data_dir / f"{expected_date}_رياض الصالحين_notes.md"
         self.assertTrue(expected_md_path.exists())
-        self.assertEqual(expected_md_path.read_text(encoding="utf-8"), "**dummy text**")
+        self.assertEqual(
+            expected_md_path.read_text(encoding="utf-8"),
+            "الحمد لله\nفصل جديد في العلم.\nطالب: صوت غير مسموع.",
+        )
 
 
 if __name__ == '__main__':

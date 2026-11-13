@@ -30,26 +30,6 @@ DEFAULT_FONT_NAME = "Traditional Arabic"
 DEFAULT_FONT_SIZE = 18
 
 
-def get_onedrive_folder(
-    keyword: str,
-    base_path: Path | None = None,
-    *,
-    catalog: RuleCatalog | None = None,
-    workspace: WorkspaceConfig | None = None,
-) -> Path:
-    """
-    Returns the target OneDrive folder Path for a given discipline keyword.
-    Scans the base_path dynamically using catalog course alias groups.
-    """
-    active_workspace, active_catalog = resolve_runtime_context(
-        workspace=workspace,
-        catalog=catalog,
-        onedrive_base=base_path,
-    )
-    resolved_base = Path(base_path) if base_path is not None else active_workspace.onedrive_base
-    return active_catalog.resolve_onedrive_folder(keyword, resolved_base)
-
-
 def set_p_rtl(p, align=None):
     """Configures paragraph with proper RTL and language attributes."""
     pPr = p._p.get_or_add_pPr()
@@ -175,26 +155,8 @@ def create_docx(
         r_hdr = p_hdr.add_run(header_line)
         set_run_font(r_hdr, font_name=DEFAULT_FONT_NAME, size_pt=DEFAULT_FONT_SIZE, bold=False)
 
-    paragraphs = markdown_text.split('\n\n')
-    for para_text in paragraphs:
-        cleaned_para = para_text.strip()
-        if not cleaned_para:
-            continue
-
-        lines = [line.strip() for line in cleaned_para.split('\n') if line.strip()]
-        if not lines:
-            continue
-
-        # Skip paragraph if it consists entirely of header block lines
-        if all(lecture_identity.is_header_line(l) for l in lines):
-            continue
-
-        # Strip any leading header lines if merged at top of paragraph
-        while lines and lecture_identity.is_header_line(lines[0]):
-            lines.pop(0)
-            
-        if not lines:
-            continue
+    for lines in lecture_identity.strip_header_blocks(markdown_text):
+        cleaned_para = '\n'.join(lines)
 
         # Check if the entire paragraph is a standalone Matn block (even if multiline)
         para_matn_match = re.match(r'^\*\*(.+)\*\*$', cleaned_para, re.DOTALL)
@@ -609,11 +571,7 @@ def export_documents(
         routing_map=active_catalog.routing_map,
     )
 
-    clean_md = lecture_identity.standardize_transcript_header(
-        markdown_text,
-        identity=ident,
-        routing_map=active_catalog.routing_map,
-    )
+    clean_md = lecture_identity.apply_transcript_header(markdown_text, ident)
     clean_md = format_thousands(clean_md)
 
     # 1. Matn Matching & Interleaving

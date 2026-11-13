@@ -18,7 +18,6 @@ from tafreegh.export_docx import (
     create_docx,
     export_documents,
     export_dual_copies,
-    get_onedrive_folder,
 )
 from tafreegh.lecture_identity import (
     NOTEBOOKLM_HEADER_PATTERNS,
@@ -31,7 +30,11 @@ from tafreegh.lecture_identity import (
 from tafreegh.matn_matcher import MatchMode, MatnMatchResult
 from tafreegh.workspace_catalog import RuleCatalog, WorkspaceConfig
 
-class TestGetOneDriveFolder(unittest.TestCase):
+class TestResolveOneDriveFolder(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = RuleCatalog.load()
+
     def setUp(self):
         self._tmp_dir = tempfile.TemporaryDirectory()
         self.base_path = Path(self._tmp_dir.name)
@@ -91,12 +94,12 @@ class TestGetOneDriveFolder(unittest.TestCase):
         ]
         for keyword, expected_folder in test_cases:
             with self.subTest(keyword=keyword):
-                result = get_onedrive_folder(keyword, self.base_path)
+                result = self.catalog.resolve_onedrive_folder(keyword, self.base_path)
                 self.assertEqual(result, self.base_path / expected_folder)
 
     def test_fallback_creates_new_folder(self):
         keyword = "تفسير"
-        result = get_onedrive_folder(keyword, self.base_path)
+        result = self.catalog.resolve_onedrive_folder(keyword, self.base_path)
         self.assertEqual(result, self.base_path / "تفسير")
 
 
@@ -207,6 +210,21 @@ Source guide
         self.assertEqual(ident.keyword, "رياض")
         self.assertEqual(ident.subject_name, "رياض الصالحين")
         self.assertEqual(ident.stem, "2026-09-24__رياض")
+
+    def test_from_text_step6_ignores_trailing_prose_after_filename_token(self):
+        meta1 = LectureIdentity.from_text(
+            "2026-09-12 معاملات.mp3 شرح زاد المعاد\nالحمد لله",
+            routing_map=self.routing_map,
+        )
+        self.assertEqual(meta1.keyword, "معاملات")
+        self.assertEqual(meta1.subject_name, "دليل الطالب (كتاب البيع)")
+
+        meta2 = LectureIdentity.from_text(
+            "2026-09-12 مجهول.mp3 ثم قال صلى الله عليه وسلم\nالحمد لله",
+            routing_map=self.routing_map,
+        )
+        self.assertEqual(meta2.keyword, "مجهول")
+        self.assertEqual(meta2.subject_name, "مجهول")
 
 
 class TestHeaderFiltering(unittest.TestCase):
@@ -655,6 +673,18 @@ class TestLectureIdentityMatching(unittest.TestCase):
             LectureIdentity(keyword="فقه البيوع").matches("17-فقه_البيوع_17.md", routing_map=self.routing_map)
         )
 
+    def test_matches_ignores_empty_or_whitespace_keyword(self):
+        self.assertFalse(
+            LectureIdentity(lecture_number="17", keyword="   ").matches(
+                "17-رياض-17.md", routing_map=self.routing_map
+            )
+        )
+        self.assertFalse(
+            LectureIdentity(lecture_number="17", keyword="_").matches(
+                "17_رياض.docx", routing_map=self.routing_map
+            )
+        )
+
 
 class TestExportNumberedDocuments(unittest.TestCase):
     def test_export_numbered_lecture_documents_e2e(self):
@@ -760,11 +790,16 @@ Source guide
         with tempfile.TemporaryDirectory() as tmp_root, tempfile.TemporaryDirectory() as tmp_onedrive:
             root_path = Path(tmp_root)
             onedrive_base = Path(tmp_onedrive)
+            raw_dir = root_path / "02_Raw_Inputs"
+            raw_dir.mkdir(parents=True)
+            raw_file = raw_dir / "2026-01-01_قديم.md"
             transcript = "بسم الله الرحمن الرحيم\nالمادة: قديم\n2026-01-01\n\nالحمد لله رب العالمين."
+            raw_file.write_text(transcript, encoding="utf-8")
             override = LectureIdentity(lecture_number="5", subject_name="فقه جديد")
 
             results = export_documents(
                 transcript,
+                original_md_path=raw_file,
                 identity=override,
                 base_onedrive=onedrive_base,
                 project_root=root_path,
@@ -943,9 +978,24 @@ class TestLectureIdentity(unittest.TestCase):
         )
         self.assertEqual(resolved.lecture_number, "2")
         self.assertIsNone(resolved.date)
+        self.assertIsNone(resolved.stem)
+        self.assertEqual(resolved.resolved_stem, "2-سيرة_الرحيق_المختوم_2")
         self.assertEqual(resolved.subject_name, "سيرة (الرحيق المختوم)")
         self.assertEqual(base_date.date, "2026-10-09")
         self.assertIsNone(override.date)
+
+        # Higher-precedence override must clear stale stem parsed from path_identity too
+        path_date_stem = LectureIdentity.from_filename("2026-01-01_قديم.md", routing_map=routing_map)
+        override_num = LectureIdentity(lecture_number="5", subject_name="فقه جديد")
+        resolved_num = resolve_document_identity(
+            "بسم الله الرحمن الرحيم\nالمادة: قديم\n2026-01-01",
+            override_num,
+            path_identity=path_date_stem,
+            routing_map=routing_map,
+        )
+        self.assertIsNone(resolved_num.date)
+        self.assertIsNone(resolved_num.stem)
+        self.assertEqual(resolved_num.resolved_stem, "5-فقه_جديد_5")
 
     def test_lecture_identity_matching_date_and_numbered(self):
         # Date match

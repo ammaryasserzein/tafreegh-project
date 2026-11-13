@@ -165,7 +165,9 @@ class LectureIdentity:
 
         seed_tokens: set[str] = set()
         if self.keyword:
-            seed_tokens.add(normalize_arabic_token(self.keyword))
+            norm_kw = normalize_arabic_token(self.keyword)
+            if norm_kw:
+                seed_tokens.add(norm_kw)
         if self.subject_name:
             norm_subj = normalize_arabic_token(self.subject_name)
             if norm_subj:
@@ -217,7 +219,7 @@ class LectureIdentity:
             cand_numbers = re.findall(r'(?<!\d)\d+(?!\d)', cleaned_cand)
             if str(target_num) in cand_numbers:
                 norm_cand = normalize_arabic_token(cleaned_cand)
-                return any(v in norm_cand for v in kw_variants)
+                return bool(norm_cand) and any(v in norm_cand for v in kw_variants)
 
         return False
 
@@ -293,24 +295,24 @@ class LectureIdentity:
                     keyword = first_word
                     subject_name = clean_sub
 
-        # 6. Filename token fallback if subject line not present (same line only)
+        # 6. Immediate filename/word token fallback after date (never scan trailing body prose)
         if not keyword and date:
-            rest_match = re.search(
-                rf'(?<!\d){re.escape(date)}[ _]+([^\n\r]+)',
+            token_match = re.search(
+                rf'(?<!\d){re.escape(date)}[ _]+([^\s.]+)',
                 text,
             )
-            if rest_match:
-                rest_line = rest_match.group(1).strip()
-                canonical_key, canonical_subj = match_canonical_subject(rest_line, rm)
+            if token_match:
+                raw_token = token_match.group(1).strip()
+                clean_token = raw_token.replace("_", " ").strip()
+                canonical_key, canonical_subj = match_canonical_subject(clean_token, rm)
                 if canonical_key:
                     keyword = canonical_key
                     subject_name = canonical_subj
                 else:
-                    token_match = re.match(r'([^\s._]+)', rest_line)
-                    if token_match:
-                        keyword = token_match.group(1).strip()
-                        norm_key = normalize_arabic(keyword)
-                        subject_name = rm.get(norm_key, keyword)
+                    first_part = raw_token.split("_")[0].strip()
+                    keyword = first_part
+                    norm_key = normalize_arabic(first_part)
+                    subject_name = rm.get(norm_key, first_part)
 
         # 7. Reverse lookup from audio file if keyword still missing
         if not keyword and audio_file:
@@ -340,6 +342,21 @@ class LectureIdentity:
         parsed = cls.from_text(cleaned, routing_map=routing_map)
         subject_name = parsed.subject_name
         keyword = parsed.keyword
+        if not parsed.lecture_number:
+            canonical_key, canonical_subj = match_canonical_subject(
+                cleaned.replace("_", " "),
+                routing_map,
+            )
+            if canonical_key and (
+                not keyword
+                or normalize_arabic(keyword) not in {normalize_arabic(k) for k in (routing_map or {})}
+                or (
+                    normalize_arabic(canonical_key).startswith(normalize_arabic(keyword))
+                    and len(canonical_key) > len(keyword)
+                )
+            ):
+                keyword = canonical_key
+                subject_name = canonical_subj
         if fallback_subject:
             canonical_key, canonical_subj = match_canonical_subject(fallback_subject, routing_map)
             if not subject_name:
@@ -360,16 +377,50 @@ def resolve_document_identity(
     Parses transcript metadata and applies non-destructive merge precedence:
     explicit override > path metadata > parsed transcript metadata.
     When a higher-precedence layer provides a lecture_number without a date,
-    prioritizes numbered lecture formatting over parsed text dates without mutating instances.
+    prioritizes numbered lecture formatting over parsed text dates without mutating instances,
+    and clears stale lower-precedence stems when naming fields are overridden.
     """
     resolved = LectureIdentity.from_text(markdown_text, routing_map=routing_map)
     for layer in (path_identity, identity):
         if layer is None:
             continue
-        resolved = resolved.merge(layer)
+        prev = resolved
+        resolved = prev.merge(layer)
         if layer.lecture_number and not layer.date:
             resolved = replace(resolved, date=None)
+        if not layer.stem and (
+            (layer.lecture_number and layer.lecture_number != prev.lecture_number)
+            or (layer.date and layer.date != prev.date)
+            or (layer.subject_name and layer.subject_name != prev.subject_name)
+        ):
+            resolved = replace(resolved, stem=None)
     return resolved
+
+
+def strip_header_blocks(markdown_text: str) -> list[list[str]]:
+    """
+    Strips NotebookLM tags and existing lecture header lines from markdown paragraphs,
+    returning non-empty cleaned line lists per paragraph.
+    """
+    blocks: list[list[str]] = []
+    for para in markdown_text.split('\n\n'):
+        lines = [line.strip() for line in para.split('\n') if line.strip()]
+        if not lines or all(is_header_line(line) for line in lines):
+            continue
+        while lines and is_header_line(lines[0]):
+            lines.pop(0)
+        if lines:
+            blocks.append(lines)
+    return blocks
+
+
+def apply_transcript_header(markdown_text: str, identity: LectureIdentity) -> str:
+    """Strips existing tags/headers and prepends the canonical 3-line header for identity."""
+    body = '\n\n'.join('\n'.join(lines) for lines in strip_header_blocks(markdown_text))
+    header = '\n'.join(identity.header_lines)
+    if body:
+        return f"{header}\n\n{body}"
+    return header
 
 
 def standardize_transcript_header(
@@ -389,23 +440,4 @@ def standardize_transcript_header(
         path_identity=path_identity,
         routing_map=routing_map,
     )
-    paragraphs = markdown_text.split('\n\n')
-    cleaned_paragraphs: list[str] = []
-
-    for para in paragraphs:
-        lines = [line.strip() for line in para.split('\n') if line.strip()]
-        if not lines:
-            continue
-        if all(is_header_line(l) for l in lines):
-            continue
-        while lines and is_header_line(lines[0]):
-            lines.pop(0)
-        if not lines:
-            continue
-        cleaned_paragraphs.append('\n'.join(lines))
-
-    body = '\n\n'.join(cleaned_paragraphs)
-    header = '\n'.join(ident.header_lines)
-    if body:
-        return f"{header}\n\n{body}"
-    return header
+    return apply_transcript_header(markdown_text, ident)

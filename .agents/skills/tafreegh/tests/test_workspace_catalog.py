@@ -368,6 +368,7 @@ assert recorded == [], f"Unexpected import-time filesystem I/O: {recorded}"
             "WORD_BASE_TEMPLATE",
             "DEFAULT_DIALECT_RULES_PATH",
             "KEYWORD_FOLDER_HINTS",
+            "get_onedrive_folder",
             "BASE_DIALECT_MARKERS",
             "load_dialect_markers",
             "DIALECT_MARKERS",
