@@ -119,7 +119,7 @@ def chunk_file(file_path: str, output_dir: str = None, target_words: int = 1300)
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: py scripts/chunk_transcript.py <input_transcript_file> [target_words]")
+        print("Usage: py .agents/skills/tafreegh/scripts/chunk_transcript.py <input_transcript_file> [target_words]")
         sys.exit(1)
         
     target = int(sys.argv[2]) if len(sys.argv) > 2 else 1300

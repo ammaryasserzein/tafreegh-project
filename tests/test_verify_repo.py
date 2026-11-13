@@ -108,19 +108,28 @@ def test_check_directories_flags_unauthorized_subdirectory(tmp_path):
     assert "Unauthorized subdirectory" in dir_findings[0].message
 
 def test_check_no_root_scratch_allows_standard_files(tmp_path):
-    (tmp_path / "README.md").write_text("Test", encoding="utf-8")
-    (tmp_path / "CODING_STANDARDS.md").write_text("Test", encoding="utf-8")
-    (tmp_path / "CONTEXT.md").write_text("Test", encoding="utf-8")
-    (tmp_path / "Word base.docx").write_text("Test", encoding="utf-8")
-    (tmp_path / ".gitignore").write_text("Test", encoding="utf-8")
-    (tmp_path / "GLOSSARY.md").write_text("Test", encoding="utf-8")
+    for filename in (
+        "CODING_STANDARDS.md",
+        "CONTEXT.md",
+        "GLOSSARY.md",
+        "Word base.docx",
+        ".gitignore",
+        ".lintstagedrc",
+        ".prettierignore",
+        ".prettierrc",
+        "package.json",
+        "package-lock.json",
+        "pytest.ini",
+    ):
+        (tmp_path / filename).write_text("Test", encoding="utf-8")
 
     findings = []
     verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
     assert len(findings) == 0, f"Expected 0 findings, got: {findings}"
 
+
 def test_check_no_root_scratch_flags_unauthorized_scratch(tmp_path):
-    (tmp_path / "README.md").write_text("Test", encoding="utf-8")
+    (tmp_path / "CODING_STANDARDS.md").write_text("Test", encoding="utf-8")
     (tmp_path / "detailed_diff.py").write_text("Test", encoding="utf-8")
     (tmp_path / "temp.md").write_text("Test", encoding="utf-8")
 
@@ -130,6 +139,76 @@ def test_check_no_root_scratch_flags_unauthorized_scratch(tmp_path):
     assert len(scratch_findings) == 2
     flagged_files = {f.file_path for f in scratch_findings}
     assert flagged_files == {"detailed_diff.py", "temp.md"}
+
+
+def test_check_no_root_scratch_rejects_retired_root_files(tmp_path):
+    (tmp_path / "README.md").write_text("Retired", encoding="utf-8")
+    (tmp_path / "handoff.md").write_text("Retired", encoding="utf-8")
+
+    findings = []
+    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
+    scratch_findings = [f for f in findings if f.category == verify_repo.FindingCategory.SCRATCH]
+    assert {f.file_path for f in scratch_findings} == {"README.md", "handoff.md"}
+
+
+def test_check_no_root_scratch_allows_git_worktree_pointer_file(tmp_path):
+    (tmp_path / ".git").write_text(
+        "gitdir: C:/Users/example/repo/.git/worktrees/Staging\n",
+        encoding="utf-8",
+    )
+
+    findings = []
+    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
+    assert len(findings) == 0, f"Expected 0 findings, got: {findings}"
+
+
+def test_check_no_root_scratch_rejects_invalid_git_file(tmp_path):
+    (tmp_path / ".git").write_text("not a valid pointer\n", encoding="utf-8")
+
+    findings = []
+    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
+    scratch_findings = [f for f in findings if f.category == verify_repo.FindingCategory.SCRATCH]
+    assert len(scratch_findings) == 1
+    assert scratch_findings[0].file_path == ".git"
+
+
+def test_check_no_root_scratch_allows_standard_and_tooling_directories(tmp_path):
+    for dirname in (
+        "01_Matn_Sources",
+        "02_Raw_Inputs",
+        "03_AI_Outputs",
+        "04_Training_Data",
+        "scripts",
+        "tests",
+        "docs",
+        "tafreegh-skill",
+        "node_modules",
+        ".git",
+        ".agents",
+        ".scratch",
+        ".husky",
+        ".pytest_cache",
+        ".obsidian",
+        ".vscode",
+    ):
+        (tmp_path / dirname).mkdir()
+
+    findings = []
+    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
+    assert len(findings) == 0, f"Expected 0 findings, got: {findings}"
+
+
+def test_check_no_root_scratch_flags_unauthorized_root_directories(tmp_path):
+    (tmp_path / ".scratch").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scratch").mkdir()
+    (tmp_path / "tmp_notes").mkdir()
+    (tmp_path / ".scratch_extra").mkdir()
+
+    findings = []
+    verify_repo.check_no_root_scratch(findings, base_dir=tmp_path)
+    scratch_findings = [f for f in findings if f.category == verify_repo.FindingCategory.SCRATCH]
+    assert {f.file_path for f in scratch_findings} == {"scratch", "tmp_notes", ".scratch_extra"}
 
 
 def test_count_open_deferred_reviews(tmp_path):

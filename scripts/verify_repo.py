@@ -35,11 +35,9 @@ FORBIDDEN_ROOT_PATTERNS = [
 
 ALLOWED_ROOT_FILES = {
     # Steering & Documentation
-    "README.md",
     "CODING_STANDARDS.md",
     "CONTEXT.md",
     "GLOSSARY.md",
-    "handoff.md",
     # Assets & Templates
     "Word base.docx",
     # Tooling & Config
@@ -50,6 +48,24 @@ ALLOWED_ROOT_FILES = {
     "package.json",
     "package-lock.json",
     "pytest.ini",
+}
+
+ALLOWED_ROOT_DIRS = {
+    *STANDARD_DIRS,
+    # Repository & Skill Tooling / Junctions
+    "scripts",
+    "tests",
+    "docs",
+    "tafreegh-skill",
+    "node_modules",
+    # Designated Scratch & Hidden Tooling
+    ".git",
+    ".agents",
+    ".scratch",
+    ".husky",
+    ".pytest_cache",
+    ".obsidian",
+    ".vscode",
 }
 
 
@@ -134,14 +150,35 @@ def check_directories(findings: list[Finding], base_dir: Path = REPO_ROOT) -> No
                         file_path=str(child.relative_to(base_dir))
                     ))
 
+def _is_git_worktree_pointer(candidate: Path) -> bool:
+    if candidate.name != ".git":
+        return False
+    try:
+        lines = candidate.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False
+    if len(lines) != 1:
+        return False
+    return lines[0].startswith("gitdir:") and bool(lines[0][len("gitdir:"):].strip())
+
+
 def check_no_root_scratch(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
-    for candidate_file in base_dir.iterdir():
-        if candidate_file.is_file():
-            if candidate_file.name not in ALLOWED_ROOT_FILES:
+    for candidate in base_dir.iterdir():
+        if candidate.is_dir() or candidate.is_junction():
+            if candidate.name not in ALLOWED_ROOT_DIRS:
                 findings.append(Finding(
                     category=FindingCategory.SCRATCH,
-                    message=f"Root-level scratch file found: {candidate_file.name}. Move to .scratch/ or $env:TEMP",
-                    file_path=candidate_file.name
+                    message=f"Root-level scratch directory found: {candidate.name}. Move to .scratch/ or $env:TEMP",
+                    file_path=candidate.name
+                ))
+        elif candidate.is_file():
+            if _is_git_worktree_pointer(candidate):
+                continue
+            if candidate.name not in ALLOWED_ROOT_FILES:
+                findings.append(Finding(
+                    category=FindingCategory.SCRATCH,
+                    message=f"Root-level scratch file found: {candidate.name}. Move to .scratch/ or $env:TEMP",
+                    file_path=candidate.name
                 ))
 
 def check_scratch_cleanliness(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:

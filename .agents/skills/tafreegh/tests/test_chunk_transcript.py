@@ -1,0 +1,100 @@
+"""Tests for the canonical transcript chunker inside the tafreegh skill toolkit."""
+
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+SKILL_DIR = Path(__file__).resolve().parent.parent
+REPO_ROOT = SKILL_DIR.parent.parent.parent
+SCRIPTS_DIR = SKILL_DIR / "scripts"
+CANONICAL_SCRIPT = SCRIPTS_DIR / "chunk_transcript.py"
+
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+import chunk_transcript
+
+
+def test_smart_chunk_text_empty_or_whitespace_returns_empty():
+    assert chunk_transcript.smart_chunk_text("") == []
+    assert chunk_transcript.smart_chunk_text("   \n\t  ") == []
+
+
+def test_smart_chunk_text_within_max_words_returns_single_chunk():
+    text = "  بسم الله الرحمن الرحيم. الحمد لله رب العالمين.  "
+    chunks = chunk_transcript.smart_chunk_text(text, target_words=10, min_words=5, max_words=15)
+    assert chunks == ["بسم الله الرحمن الرحيم. الحمد لله رب العالمين."]
+
+
+def test_smart_chunk_text_splits_at_sentence_boundaries_preserving_all_words():
+    sentences = [
+        f"هذه جملة علمية رقم {i} فيها شرح واضح ومفصل للمسألة الفقهية."
+        for i in range(1, 13)
+    ]
+    text = " ".join(sentences)
+
+    chunks = chunk_transcript.smart_chunk_text(text, target_words=36, min_words=24, max_words=48)
+
+    assert len(chunks) >= 3
+    for chunk in chunks[:-1]:
+        assert chunk.endswith(".")
+        word_count = len(chunk.split())
+        assert 24 <= word_count <= 48
+    assert " ".join(chunks).split() == text.split()
+
+
+def test_smart_chunk_text_respects_arabic_question_and_newline_boundaries():
+    paragraphs = [
+        "هل هذه المسألة متفق عليها بين الفقهاء؟ نعم فيها قولان معروفان عند أهل العلم",
+        "وما دليل القول الأول في هذا الباب؟ الدليل قول النبي صلى الله عليه وسلم في الصحيح",
+        "وما وجه الاستدلال من هذا الحديث الشريف؟ وجهه ظاهر في سياق الرواية الصحيحة",
+    ]
+    text = "\n".join(paragraphs)
+
+    chunks = chunk_transcript.smart_chunk_text(text, target_words=14, min_words=10, max_words=20)
+
+    assert len(chunks) >= 2
+    assert chunks[0].endswith("؟") or "\n" not in chunks[0]
+    assert " ".join(chunks).split() == text.split()
+
+
+def test_chunk_file_creates_canonical_arabic_chunk_directory_and_parts(tmp_path):
+    sentences = [
+        f"فقرة رقم {i} من الدرس الشرعي المبارك تتناول بيان الحكم الشرعي بدليله الواضح."
+        for i in range(1, 160)
+    ]
+    transcript = tmp_path / "2026-10-17_زاد.md"
+    transcript.write_text(" ".join(sentences), encoding="utf-8")
+
+    created = chunk_transcript.chunk_file(str(transcript))
+
+    expected_dir = tmp_path / "2026-10-17_زاد_مقاطع"
+    assert expected_dir.is_dir()
+    assert len(created) == 2
+    part_files = sorted(expected_dir.iterdir())
+    assert [p.name for p in part_files] == [
+        "2026-10-17_زاد_جزء_01.txt",
+        "2026-10-17_زاد_جزء_02.txt",
+    ]
+    reconstructed = " ".join(p.read_text(encoding="utf-8") for p in part_files)
+    assert reconstructed.split() == transcript.read_text(encoding="utf-8").split()
+
+
+def test_chunk_file_missing_input_exits_with_nonzero(tmp_path):
+    with pytest.raises(SystemExit) as exc_info:
+        chunk_transcript.chunk_file(str(tmp_path / "missing_transcript.md"))
+    assert exc_info.value.code == 1
+
+
+def test_cli_usage_points_to_canonical_skill_script_and_duplicate_is_removed():
+    result = subprocess.run(
+        [sys.executable, str(CANONICAL_SCRIPT)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert result.returncode == 1
+    assert ".agents/skills/tafreegh/scripts/chunk_transcript.py" in result.stdout
+    assert not (REPO_ROOT / "scripts" / "chunk_transcript.py").exists()
