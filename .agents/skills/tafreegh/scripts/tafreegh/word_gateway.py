@@ -5,9 +5,11 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO
+from typing import IO, TypeVar
 
 import docx
 import lxml.etree
@@ -30,19 +32,30 @@ HYBRID_SUMMARY_HEADING = "### تقرير المتن الهجين"
 _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _W_NS_MAP = {"w": _W_NS}
 _W_FALSE_VALUES = frozenset({"0", "false", "off"})
-_INLINE_BACKTICK_SPAN_RE = re.compile(r"`([^`\n]+)`")
+_BACKTICK_SPAN_RE = re.compile(r"`([^`]*)`")
 _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
 _HTML_COMMENT_INLINE_RE = re.compile(r"<!--.*?-->\s*")
 _BOLD_BLOCK_RE = re.compile(r"^\*\*(.+)\*\*$", re.DOTALL)
 _BOLD_SPAN_RE = re.compile(r"(\*\*[^*]+\*\*)")
+_T = TypeVar("_T")
+_ARCHIVE_READ_ERRORS = (
+    OSError,
+    zipfile.BadZipFile,
+    zipfile.LargeZipFile,
+    zlib.error,
+    KeyError,
+    ET.ParseError,
+    OpcError,
+    lxml.etree.LxmlError,
+    UnicodeDecodeError,
+    ValueError,
+    RuntimeError,
+    NotImplementedError,
+)
 
 
 class DocxArchiveError(Exception):
     """Raised when a .docx archive is missing, unreadable, malformed, or invalid OOXML."""
-
-    def __init__(self, message: str, path: Path | str | None = None) -> None:
-        self.path = Path(path) if path is not None else None
-        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -59,7 +72,6 @@ class InspectedRun:
     has_rtl: bool
     bidi_lang: str | None
     color_val: str | None
-    has_color_element: bool
 
 
 @dataclass(frozen=True)
@@ -89,7 +101,6 @@ class InspectedSectionMargins:
 class InspectedDocument:
     """Immutable OOXML document inspection snapshot."""
 
-    path: Path | None
     sections: tuple[InspectedSectionMargins, ...]
     paragraphs: tuple[InspectedParagraph, ...]
 
@@ -113,59 +124,49 @@ def _parse_run_bold_flags(rpr_el: object | None) -> tuple[bool, bool, bool]:
     return (has_b or has_b_cs), has_b, has_b_cs
 
 
-def _format_archive_label(docx_source: Path | str | IO[bytes]) -> str:
-    return str(docx_source) if isinstance(docx_source, (str, Path)) else "<stream>"
+def _load_docx_archive(
+    docx_source: Path | str | IO[bytes],
+    loader: Callable[[str | IO[bytes]], _T],
+) -> _T:
+    """Opens a .docx source through loader, wrapping archive/XML failures as DocxArchiveError."""
+    label = str(docx_source) if isinstance(docx_source, (str, Path)) else "<stream>"
+    if isinstance(docx_source, (str, Path)):
+        if not Path(docx_source).is_file():
+            raise DocxArchiveError(f"Cannot read .docx archive '{label}': file not found.")
+        source_arg: str | IO[bytes] = str(docx_source)
+    else:
+        source_arg = docx_source
+
+    try:
+        return loader(source_arg)
+    except _ARCHIVE_READ_ERRORS as exc:
+        raise DocxArchiveError(f"Cannot read .docx archive '{label}': {exc}") from exc
 
 
 def _read_document_xml_root(docx_source: Path | str | IO[bytes]) -> ET.Element:
     """Opens a .docx zip archive and parses word/document.xml into an ElementTree root."""
-    label = _format_archive_label(docx_source)
-    if isinstance(docx_source, (str, Path)) and not Path(docx_source).is_file():
-        raise DocxArchiveError(f"Cannot read .docx archive '{label}': file not found.", path=docx_source)
 
-    try:
-        with zipfile.ZipFile(docx_source) as archive:
+    def _parse(source: str | IO[bytes]) -> ET.Element:
+        with zipfile.ZipFile(source) as archive:
             xml_bytes = archive.read("word/document.xml")
         root = ET.fromstring(xml_bytes)
-    except (OSError, zipfile.BadZipFile, KeyError, ET.ParseError, UnicodeDecodeError, ValueError) as exc:
-        path_arg = docx_source if isinstance(docx_source, (str, Path)) else None
-        raise DocxArchiveError(f"Cannot read .docx archive '{label}': {exc}", path=path_arg) from exc
+        if root.tag != f"{{{_W_NS}}}document":
+            raise ValueError(
+                f"Invalid OOXML root tag '{root.tag}' (expected WordprocessingML document)."
+            )
+        return root
 
-    if root.tag != f"{{{_W_NS}}}document":
-        path_arg = docx_source if isinstance(docx_source, (str, Path)) else None
-        raise DocxArchiveError(
-            f"Invalid OOXML root tag '{root.tag}' in '{label}' (expected WordprocessingML document).",
-            path=path_arg,
-        )
-    return root
+    return _load_docx_archive(docx_source, _parse)
 
 
 def _open_docx_document(docx_source: Path | str | IO[bytes]) -> docx.document.Document:
     """Opens a .docx package via python-docx, raising DocxArchiveError on archive/XML failures."""
-    label = _format_archive_label(docx_source)
-    path_arg = docx_source if isinstance(docx_source, (str, Path)) else None
-    if path_arg is not None and not Path(path_arg).is_file():
-        raise DocxArchiveError(f"Cannot read .docx archive '{label}': file not found.", path=path_arg)
-
-    source_arg: str | IO[bytes] = str(docx_source) if isinstance(docx_source, (str, Path)) else docx_source
-    try:
-        return docx.Document(source_arg)
-    except (
-        OSError,
-        zipfile.BadZipFile,
-        KeyError,
-        OpcError,
-        lxml.etree.LxmlError,
-        ET.ParseError,
-        UnicodeDecodeError,
-        ValueError,
-    ) as exc:
-        raise DocxArchiveError(f"Cannot read .docx archive '{label}': {exc}", path=path_arg) from exc
+    return _load_docx_archive(docx_source, docx.Document)
 
 
 def strip_markdown_leakage(markdown_text: str) -> str:
     """Strips inline backticks wrapping Arabic text while preserving English/code spans (ADR-0003)."""
-    return _INLINE_BACKTICK_SPAN_RE.sub(
+    return _BACKTICK_SPAN_RE.sub(
         lambda match: match.group(1) if _ARABIC_CHAR_RE.search(match.group(1)) else match.group(0),
         markdown_text,
     )
@@ -320,7 +321,7 @@ def create_docx(
     for lines in lecture_identity.strip_header_blocks(sanitized):
         cleaned_para = "\n".join(lines)
         para_matn_match = _BOLD_BLOCK_RE.match(cleaned_para)
-        if para_matn_match and not re.search(r"\*\*[^*]+\*\*", para_matn_match.group(1)):
+        if para_matn_match and not _BOLD_SPAN_RE.search(para_matn_match.group(1)):
             matn_content = " ".join(
                 ln.strip() for ln in para_matn_match.group(1).split("\n") if ln.strip()
             )
@@ -336,7 +337,7 @@ def create_docx(
             if not cleaned_line:
                 continue
 
-            matn_line_match = re.match(r"^\*\*(.+)\*\*$", cleaned_line)
+            matn_line_match = _BOLD_BLOCK_RE.match(cleaned_line)
             if matn_line_match:
                 _add_styled_paragraph(doc, matn_line_match.group(1), bold=True)
                 continue
@@ -399,8 +400,7 @@ def _inspect_run(run: object) -> InspectedRun:
     lang_el = r_pr.find(qn("w:lang")) if has_rpr else None
     bidi_lang = lang_el.get(qn("w:bidi")) if lang_el is not None else None
     color_el = r_pr.find(qn("w:color")) if has_rpr else None
-    has_color_element = color_el is not None
-    color_val = color_el.get(qn("w:val")) if color_el is not None else None
+    color_val = color_el.get(qn("w:val"), "") if color_el is not None else None
 
     return InspectedRun(
         text=run.text,  # type: ignore[union-attr]
@@ -413,7 +413,6 @@ def _inspect_run(run: object) -> InspectedRun:
         has_rtl=has_rtl,
         bidi_lang=bidi_lang,
         color_val=color_val,
-        has_color_element=has_color_element,
     )
 
 
@@ -451,9 +450,7 @@ def inspect_docx(docx_source: Path | str | IO[bytes]) -> InspectedDocument:
             )
         )
 
-    doc_path = Path(docx_source) if isinstance(docx_source, (str, Path)) else None
     return InspectedDocument(
-        path=doc_path,
         sections=sections,
         paragraphs=tuple(paragraphs),
     )

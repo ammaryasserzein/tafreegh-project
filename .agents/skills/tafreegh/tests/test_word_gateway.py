@@ -8,7 +8,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
+from unittest.mock import patch
 
 import docx
 from docx.oxml import OxmlElement
@@ -38,6 +40,13 @@ class TestWordGatewaySanitizationAndMatnSource(unittest.TestCase):
         self.assertEqual(
             strip_markdown_leakage(raw),
             "قال تعالى (عَمَّ يَتَسَاءَلُونَ) وراجع `export_docx.py` في `2026-10-22`.",
+        )
+
+    def test_strip_markdown_leakage_handles_multiline_arabic_and_empty_backticks(self):
+        raw = "تمهيد `` وقوله `(السَّطْرُ الأَوَّلُ\nالسَّطْرُ الثَّانِي)` وراجع `file.py`."
+        self.assertEqual(
+            strip_markdown_leakage(raw),
+            "تمهيد `` وقوله (السَّطْرُ الأَوَّلُ\nالسَّطْرُ الثَّانِي) وراجع `file.py`.",
         )
 
     def test_strip_hybrid_summary_removes_report_block(self):
@@ -127,7 +136,7 @@ class TestWordGatewayInspectDocx(unittest.TestCase):
             self.assertAlmostEqual(p0.runs[0].font_size_pt, 18.0)
             self.assertTrue(p0.runs[0].has_rtl)
             self.assertEqual(p0.runs[0].bidi_lang, "ar-SA")
-            self.assertFalse(p0.runs[0].has_color_element)
+            self.assertIsNone(p0.runs[0].color_val)
 
             # Matn paragraph P4
             p4 = info.paragraphs[4]
@@ -163,7 +172,6 @@ class TestWordGatewayInspectDocx(unittest.TestCase):
         self.assertTrue(run0.is_bold)
         self.assertFalse(run0.has_b)
         self.assertTrue(run0.has_b_cs)
-        self.assertTrue(run0.has_color_element)
         self.assertEqual(run0.color_val, "FF0000")
         self.assertAlmostEqual(run0.font_size_pt, 14.0)
 
@@ -177,6 +185,18 @@ class TestWordGatewayInspectDocx(unittest.TestCase):
             bad.write_text("not a zip", encoding="utf-8")
             with self.assertRaises(DocxArchiveError):
                 inspect_docx(bad)
+
+            valid = tmp / "valid.docx"
+            create_docx("بسم الله الرحمن الرحيم\nالمادة: رياض الصالحين\n2026-10-22\n\nالحمد لله.", valid)
+            with patch("zipfile.ZipFile.read", side_effect=RuntimeError("File is encrypted, password required")):
+                with self.assertRaises(DocxArchiveError):
+                    extract_text(valid)
+            with patch("zipfile.ZipFile.read", side_effect=zlib.error("Error -3 while decompressing data")):
+                with self.assertRaises(DocxArchiveError):
+                    extract_text(valid)
+            with patch("docx.Document", side_effect=RuntimeError("File is encrypted, password required")):
+                with self.assertRaises(DocxArchiveError):
+                    inspect_docx(valid)
 
     def test_bold_flag_symmetry_across_extract_and_inspect(self):
         doc = docx.Document()

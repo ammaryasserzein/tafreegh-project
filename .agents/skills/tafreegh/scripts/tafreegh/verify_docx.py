@@ -209,7 +209,7 @@ def _check_ooxml_styling(doc_info: InspectedDocument, report: ValidationReport) 
                 )
 
             if r.has_rpr:
-                if r.has_color_element:
+                if r.color_val is not None:
                     if r.color_val and r.color_val.lower() not in ("auto", "000000"):
                         _flag(
                             report,
@@ -218,7 +218,7 @@ def _check_ooxml_styling(doc_info: InspectedDocument, report: ValidationReport) 
                             f"Paragraph P{p_idx} run has inline color '{r.color_val}' (must inherit default black).",
                             r.text[:60],
                         )
-                    elif r.color_val is not None:
+                    else:
                         _flag(
                             report,
                             "FONT_COLOR_FORBIDDEN",
