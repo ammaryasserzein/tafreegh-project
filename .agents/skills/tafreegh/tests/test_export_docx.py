@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 import sys
 import tempfile
+import warnings
 import docx
 from docx.oxml.ns import qn
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -11,8 +12,6 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 from tafreegh.export_docx import (
-    CANONICAL_SUBJECT_NAMES,
-    DIALECT_MARKERS,
     _extract_candidate_query,
     _format_segment_output,
     archive_processed_inputs,
@@ -22,21 +21,39 @@ from tafreegh.export_docx import (
     get_onedrive_folder,
     is_header_line,
     is_matching_stem,
-    load_dialect_markers,
     parse_metadata,
     resolve_document_identity,
     standardize_transcript_header,
 )
 from tafreegh.lecture_identity import (
     LectureIdentity,
-    load_canonical_routing,
     normalize_stem,
 )
 from tafreegh.matn_matcher import MatchMode, MatnMatchResult
+from tafreegh.workspace_catalog import RuleCatalog, WorkspaceConfig
 
 class TestGetOneDriveFolder(unittest.TestCase):
     def setUp(self):
-        self.base_path = Path("C:/Users/L/OneDrive/1. دوري")
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.base_path = Path(self._tmp_dir.name)
+        for folder_name in (
+            "1. الاسماء الحسنى",
+            "1. رياض الصالحين",
+            "1. سيرة (الرحيق المختوم)",
+            "1. معاملات",
+            "2. التوحيد",
+            "2. لب الاصول",
+            "ديوان الشافعي",
+            "زاد المعاد",
+            "شرح مختصر الروضة",
+            "صيد الخاطر",
+            "المنطق",
+            "فقه البيوع (سعد الخثلان)",
+        ):
+            (self.base_path / folder_name).mkdir()
+
+    def tearDown(self):
+        self._tmp_dir.cleanup()
 
     def test_known_keywords_mapping(self):
         test_cases = [
@@ -779,16 +796,17 @@ class TestLectureIdentity(unittest.TestCase):
 
 class TestCanonicalRoutingSSOT(unittest.TestCase):
     def test_canonical_routing_loads_from_context_md(self):
-        self.assertGreater(len(CANONICAL_SUBJECT_NAMES), 30)
+        catalog = RuleCatalog.load()
+        self.assertGreater(len(catalog.routing_map), 30)
         # Verify core subjects are mapped dynamically from CONTEXT.md
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("بيوع"), "فقه البيوع (سعد الخثلان)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("خثلان"), "فقه البيوع (سعد الخثلان)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("فقه_البيوع"), "فقه البيوع (سعد الخثلان)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("سيرة"), "سيرة (الرحيق المختوم)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("رحيق"), "سيرة (الرحيق المختوم)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("منطق"), "المنطق (السلم المنورق)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("سلم"), "المنطق (السلم المنورق)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("زاد"), "زاد المعاد")
+        self.assertEqual(catalog.routing_map.get("بيوع"), "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(catalog.routing_map.get("خثلان"), "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(catalog.routing_map.get("فقه_البيوع"), "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(catalog.routing_map.get("سيرة"), "سيرة (الرحيق المختوم)")
+        self.assertEqual(catalog.routing_map.get("رحيق"), "سيرة (الرحيق المختوم)")
+        self.assertEqual(catalog.routing_map.get("منطق"), "المنطق (السلم المنورق)")
+        self.assertEqual(catalog.routing_map.get("سلم"), "المنطق (السلم المنورق)")
+        self.assertEqual(catalog.routing_map.get("زاد"), "زاد المعاد")
 
     def test_load_canonical_routing_from_custom_table(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -800,11 +818,11 @@ class TestCanonicalRoutingSSOT(unittest.TestCase):
                 "| `(عقيدة)` / `(واسطية)` | **العقيدة الواسطية** | الواسطية لشيخ الإسلام |\n",
                 encoding="utf-8"
             )
-            routing = load_canonical_routing(custom_context)
-            self.assertEqual(routing.get("عقيدة"), "العقيدة الواسطية")
-            self.assertEqual(routing.get("واسطية"), "العقيدة الواسطية")
-            self.assertEqual(routing.get("العقيدة"), "العقيدة الواسطية")
-            self.assertEqual(routing.get("الواسطية"), "العقيدة الواسطية")
+            catalog = RuleCatalog.load(context_path=custom_context)
+            self.assertEqual(catalog.routing_map.get("عقيدة"), "العقيدة الواسطية")
+            self.assertEqual(catalog.routing_map.get("واسطية"), "العقيدة الواسطية")
+            self.assertEqual(catalog.routing_map.get("العقيدة"), "العقيدة الواسطية")
+            self.assertEqual(catalog.routing_map.get("الواسطية"), "العقيدة الواسطية")
 
     def test_load_canonical_routing_with_swapped_columns(self):
         # Table where subject column comes first, keywords second
@@ -817,42 +835,85 @@ class TestCanonicalRoutingSSOT(unittest.TestCase):
                 "| **أصول الفقه** | `(أصول)` / `(ورقات)` |\n",
                 encoding="utf-8"
             )
-            routing = load_canonical_routing(custom_context)
-            self.assertEqual(routing.get("أصول"), "أصول الفقه")
-            self.assertEqual(routing.get("ورقات"), "أصول الفقه")
-            self.assertEqual(routing.get("أصول الفقه"), "أصول الفقه")
+            catalog = RuleCatalog.load(context_path=custom_context)
+            self.assertEqual(catalog.routing_map.get("أصول"), "أصول الفقه")
+            self.assertEqual(catalog.routing_map.get("ورقات"), "أصول الفقه")
+            self.assertEqual(catalog.routing_map.get("أصول الفقه"), "أصول الفقه")
+
+    def test_export_documents_uses_injected_workspace_and_custom_catalog(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "repo"
+            onedrive = Path(tmp_dir) / "onedrive"
+            root.mkdir()
+            (onedrive / "العقيدة الواسطية").mkdir(parents=True)
+            custom_context = root / "CONTEXT.md"
+            custom_context.write_text(
+                "## 3. توجيه المتون (Routing Map)\n\n"
+                "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
+                "| --- | --- | --- |\n"
+                "| `(عقيدة)` / `(واسطية)` | **العقيدة الواسطية** | الواسطية |\n",
+                encoding="utf-8",
+            )
+            custom_dialect = root / "dialect-rules.md"
+            custom_dialect.write_text(
+                "## Attendee Anonymization (فلان)\n"
+                "- **Preserved Titles & Kunyas**: أخوكم فلان، أبو فلان، الشيخ فلان.\n"
+                "- **Preserved Non-Attendee Names**: (زيد).\n"
+                "## Colloquial Lexicon & Verbal Markers\n- **عامية_مخصصة**\n",
+                encoding="utf-8",
+            )
+            ws = WorkspaceConfig.resolve(
+                project_root=root,
+                onedrive_base=onedrive,
+                context_path=custom_context,
+                dialect_rules_path=custom_dialect,
+                env={},
+            )
+            res = export_documents(
+                "2026-11-01 واسطية.mp3\n\nالحمد لله رب العالمين.",
+                workspace=ws,
+            )
+            self.assertEqual(res["onedrive_file"].parent, onedrive / "العقيدة الواسطية")
+            doc = docx.Document(str(res["onedrive_file"]))
+            self.assertEqual(doc.paragraphs[1].text.strip(), "المادة: العقيدة الواسطية")
 
 
 class TestLoadDialectMarkers(unittest.TestCase):
     def test_load_from_default_dialect_rules_ssot(self):
-        """Verify load_dialect_markers loads the 7 colloquial markers from dialect-rules.md SSOT."""
-        markers = load_dialect_markers()
+        """Verify RuleCatalog loads the 7 colloquial markers from dialect-rules.md SSOT."""
+        catalog = RuleCatalog.load()
         seven_markers = {"بتوع", "الفلوس", "اتسرق", "اتسرقت", "اتكسر", "اتعمل", "هشتري"}
         for marker in seven_markers:
-            self.assertIn(marker, markers)
-            self.assertIn(marker, DIALECT_MARKERS)
-        self.assertIn("ملوش", markers)
-        self.assertIn("ملوش", DIALECT_MARKERS)
+            self.assertIn(marker, catalog.dialect_markers)
+        self.assertIn("ملوش", catalog.dialect_markers)
 
     def test_load_dialect_markers_custom_path(self):
         """Verify custom markdown dialect rules can be loaded dynamically."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             custom_rules = Path(tmp_dir) / "dialect-rules.md"
             custom_rules.write_text(
+                "## Attendee Anonymization (فلان)\n"
+                "- **Preserved Titles & Kunyas**: أخوكم فلان، أبو فلان، الشيخ فلان.\n"
+                "- **Preserved Non-Attendee Names**: (زيد).\n"
                 "## Colloquial Lexicon & Verbal Markers\n\n"
                 "- **علامة_جديدة**، **لفظ_عامي**\n",
                 encoding="utf-8",
             )
-            markers = load_dialect_markers(custom_rules)
-            self.assertIn("علامة_جديدة", markers)
-            self.assertIn("لفظ_عامي", markers)
+            catalog = RuleCatalog.load(dialect_rules_path=custom_rules)
+            self.assertIn("علامة_جديدة", catalog.dialect_markers)
+            self.assertIn("لفظ_عامي", catalog.dialect_markers)
 
     def test_load_dialect_markers_fallback_missing_file(self):
-        """Verify fallback to base markers when rules file does not exist."""
-        markers = load_dialect_markers(Path("non_existent_dialect_rules.md"))
-        self.assertIn("كدا", markers)
-        self.assertIn("مش", markers)
-        self.assertIsInstance(markers, set)
+        """Verify fallback to base markers and D6 warning when rules file does not exist."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            missing_rules = Path(tmp_dir) / "non_existent_dialect_rules.md"
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                catalog = RuleCatalog.load(dialect_rules_path=missing_rules)
+            self.assertTrue(any(issubclass(w.category, UserWarning) for w in caught))
+            self.assertIn("كدا", catalog.dialect_markers)
+            self.assertIn("مش", catalog.dialect_markers)
+            self.assertIsInstance(catalog.dialect_markers, frozenset)
 
 
 

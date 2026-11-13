@@ -12,7 +12,7 @@
 
 - **Domain vs. Mechanics**: `CONTEXT.md` maintains high-level domain terminology, routing tables, and lean pointers. Operational mechanics belong strictly in designated skill files (e.g. `.agents/skills/tafreegh/SKILL.md`).
 - **Single Definition**: State flags, options, and heuristics in their authoritative file. Ancillary documents point to that single definition.
-- **Programmatic SSOT**: Import shared Arabic normalization, identity resolution, header patterns, and dialect rules from `.agents/skills/tafreegh/scripts/tafreegh/arabic_normalizer.py`, `.agents/skills/tafreegh/scripts/tafreegh/lecture_identity.py`, `.agents/skills/tafreegh/scripts/tafreegh/export_docx.py`, and `.agents/skills/tafreegh/references/dialect-rules.md` across validator and diff scripts.
+- **Programmatic SSOT**: Import shared Arabic normalization, identity resolution, header patterns, workspace configuration, and rule catalog loading from `.agents/skills/tafreegh/scripts/tafreegh/arabic_normalizer.py`, `.agents/skills/tafreegh/scripts/tafreegh/lecture_identity.py`, `.agents/skills/tafreegh/scripts/tafreegh/workspace_catalog.py`, `.agents/skills/tafreegh/scripts/tafreegh/export_docx.py`, and `.agents/skills/tafreegh/references/dialect-rules.md` across validator and diff scripts.
 
 ## 4. Scratch & Tool Economy
 

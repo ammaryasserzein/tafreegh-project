@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import sys
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -19,23 +18,22 @@ from .arabic_normalizer import (
 from .export_docx import (
     DEFAULT_FONT_NAME,
     DEFAULT_FONT_SIZE,
-    DIALECT_MARKERS,
     NOTEBOOKLM_HEADER_PATTERNS,
     read_matn_source_content,
 )
-from .lecture_identity import LectureIdentity, load_canonical_routing
+from .lecture_identity import LectureIdentity
 from .matn_matcher import (
     COMPOUND_SHARH_SPLIT_RE,
     MatchMode,
     SequentialMatnMatcher,
 )
+from .workspace_catalog import RuleCatalog, WorkspaceConfig
 
 # Ensure UTF-8 output on Windows
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 HEADER_LINE_COUNT = 3
-DEFAULT_DIALECT_RULES_PATH = Path(__file__).resolve().parent.parent.parent / "references" / "dialect-rules.md"
 
 CANONICAL_DUA_TEXT = (
     "والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، "
@@ -366,6 +364,7 @@ def _check_headers_and_conclusion(
     para_records: list[ParagraphRecord],
     report: ValidationReport,
     context_path: Path | str | None = None,
+    catalog: RuleCatalog | None = None,
 ) -> None:
     if len(doc.paragraphs) <= HEADER_LINE_COUNT:
         _flag(
@@ -396,9 +395,13 @@ def _check_headers_and_conclusion(
             p0_text[:60],
         )
 
+    active_catalog = (
+        catalog
+        if catalog is not None
+        else RuleCatalog.load(context_path=context_path)
+    )
     p1_text = doc.paragraphs[1].text.strip()
-    routing_map = load_canonical_routing(Path(context_path) if context_path else None)
-    canonical_subjects = set(routing_map.values())
+    canonical_subjects = active_catalog.canonical_subjects
     if not p1_text.startswith("المادة: "):
         _flag(
             report,
@@ -419,7 +422,7 @@ def _check_headers_and_conclusion(
             )
 
     p2_text = doc.paragraphs[2].text.strip()
-    p2_ident = LectureIdentity.from_text(p2_text)
+    p2_ident = LectureIdentity.from_text(p2_text, routing_map=active_catalog.routing_map)
     normalized_p2 = re.sub(r"\s+", " ", p2_text)
     if not ((p2_ident.date or p2_ident.lecture_number) and p2_ident.header_line_3 == normalized_p2):
         _flag(
@@ -574,367 +577,25 @@ def _check_punctuation_and_orthography(
             )
 
 
-def load_dialect_replacements(
-    rules_path: Path | str | None = None,
-) -> list[tuple[re.Pattern, str]]:
-    """Dynamically parses Egyptian colloquial normalization rules from references/dialect-rules.md."""
-    path = Path(rules_path) if rules_path else DEFAULT_DIALECT_RULES_PATH
-    if not path.exists():
-        return []
-
-    text = path.read_text(encoding="utf-8")
-    replacements: list[tuple[re.Pattern, str]] = []
-    fused_particles: set[str] = set()
-
-    for line in text.splitlines():
-        stripped = line.strip()
-
-        # 1. Parse Markdown table rows: | raw_variants | **target** | notes |
-        if stripped.startswith("|") and "**" in stripped:
-            cells = [c.strip() for c in stripped.strip("|").split("|")]
-            if len(cells) >= 2:
-                raw_col, target_col = cells[0], cells[1]
-                target_m = re.search(r"\*\*(.+?)\*\*", target_col)
-                if not target_m:
-                    continue
-                target = target_m.group(1).strip()
-                raw_without_placeholders = re.sub(r"\[[^\]]*\]", "", raw_col).strip()
-                if not raw_without_placeholders:
-                    continue
-                variants = []
-                for v in raw_without_placeholders.split("/"):
-                    v_clean = v.strip()
-                    # Skip placeholder patterns with brackets or parenthetical context notes
-                    if not v_clean or any(ch in v_clean for ch in "[]()") or v_clean == target:
-                        continue
-                    variants.append(re.sub(r"\s+", r"\\s+", re.escape(v_clean)))
-                if variants:
-                    joined = "|".join(variants) if len(variants) > 1 else variants[0]
-                    pat = re.compile(rf"(?<!\w)(?:{joined})(?!\w)")
-                    replacements.append((pat, target))
-
-        # 2. Parse Fused Negation Particles: **مفيهوش**، **مالهاش**، **ملوش**، **مفيش**، **مكانوش**، **ميقفوش**
-        elif "Fused Negation Particles" in stripped:
-            tokens = [m[0] or m[1] for m in re.findall(r"\*\*([^*]+)\*\*|`([^`]+)`", stripped)]
-            for tok in tokens:
-                tok_clean = tok.strip()
-                if not re.search(r"[\u0600-\u06FF]", tok_clean):
-                    continue
-                fused_particles.add(tok_clean)
-                if tok_clean.startswith("م") and not tok_clean.startswith("ما"):
-                    unfused = "ما" + tok_clean[1:]
-                    fused_particles.add(unfused)
-                    replacements.append((re.compile(rf"(?<!\w){re.escape(unfused)}(?!\w)"), tok_clean))
-
-        # 3. Parse Compound Verb Negation: Write ما + فعل + ش as separate particles: **ما جتش**، ...
-        elif "Compound Verb Negation" in stripped:
-            tokens = [m[0] or m[1] for m in re.findall(r"\*\*([^*]+)\*\*|`([^`]+)`", stripped)]
-            for tok in tokens:
-                tok_clean = tok.strip()
-                if tok_clean.startswith("ما ") and tok_clean.endswith("ش") and "[" not in tok_clean and "+" not in tok_clean:
-                    joined_form = tok_clean.replace(" ", "")
-                    replacements.append((re.compile(rf"(?<!\w){re.escape(joined_form)}(?!\w)"), tok_clean))
-
-            # General compound verb negation rule for any other attached ما+[verb]+ش not in fused_particles
-            if fused_particles:
-                excl = "|".join(re.escape(fp) for fp in sorted(fused_particles))
-                comp_pat = re.compile(rf"(?<!\w)(?!(?:{excl})(?!\w))ما([\u0600-\u06FF]{{2,}})ش(?!\w)")
-            else:
-                comp_pat = re.compile(r"(?<!\w)ما([\u0600-\u06FF]{2,})ش(?!\w)")
-            replacements.append((comp_pat, r"ما \1ش"))
-
-    return replacements
-
-
 def _strip_parenthesized_citations(text: str) -> str:
     """Removes parenthesized citations (...) from text."""
     return re.sub(r"\([^)]*\)", " ", text)
 
 
-KINSHIP_GRAMMATICAL_STOPWORDS = frozenset({
-    "ده", "في", "هنا", "هناك", "بيسأل", "يسأل", "قال", "بيقول", "يقول",
-    "بتاع", "عايز", "عاوز", "طلب", "بعث", "بعت", "كاتب", "كتب", "اللي",
-    "المسلم", "المؤمن", "الصعيدي", "الصييت", "الطالب", "الحاضر", "السائل",
-    "المصري", "التاني", "بقى", "على", "يعني", "أحد", "يبقى", "وجاي", "واعتذر",
-    "بيتساءل", "بتقول", "بيضرب", "عمال",
-})
-
-VOCATIVE_GRAMMATICAL_STOPWORDS = frozenset({
-    "سيدي", "سيدنا", "ابني", "بني", "أخي", "أخانا", "أخونا", "أخويا", "اخويا",
-    "جماعة", "إخواننا", "إخواني", "شباب", "ولاد", "أولاد", "أستاذ", "أستاذنا", "مولانا",
-    "شيخنا", "عم", "رب", "ربنا", "ربي", "الله", "رسول", "نبي", "بشر",
-    "ناس", "طالب", "طلاب", "حبيبي", "حبيبنا", "بشمهندس", "مهندس",
-    "جميل", "عسل", "عساسيل", "عسايل", "حلويات", "إما", "اما", "إيه", "ايه", "ولا",
-    "قول", "سؤال", "سلام", "نهار", "ابن", "واد", "كمن", "اللي", "ليتني", "ذا", "روح",
-})
-
-
-BASE_KINSHIP_NOUNS: frozenset[str] = frozenset({
-    "أخوكم", "اخوكم", "أخونا", "اخونا", "الأخ", "الاخ", "الأخت", "الاخت",
-})
-
-BASE_KUNYA_PREFIXES: frozenset[str] = frozenset({
-    "أبو", "ابو", "أبا", "ابا",
-})
-
-BASE_TITLE_PREFIXES: frozenset[str] = frozenset({
-    "شيخ", "الشيخ", "دكتور", "الدكتور",
-})
-
-BASE_KNOWN_ATTENDEE_NAMES: frozenset[str] = frozenset({
-    "معاذ", "طارق", "سارة",
-})
-
-ILLUSTRATION_ACTIONS = (
-    r"(?:ب?[يت]عمل|ب?[يت]سأل|ب?[يت]قول|قال[ت]?|عايز[ةه]?|عاوز[ةه]?|"
-    r"قاعد[ةه]?|واقف[ةه]?|نايم[ةه]?|جه|جا[تت]|راح[ت]?|شايف[ةه]?|سامع[ةه]?)"
-)
-
-
-BASE_EXEMPT_NAMES: frozenset[str] = frozenset({
-    "زيد", "عمرو", "بكر", "هند", "جحا", "إبراهيم",
-})
-
-
-def _is_vocative_grammatical_non_name(
-    token: str,
-    stopwords: frozenset[str] = VOCATIVE_GRAMMATICAL_STOPWORDS,
-) -> bool:
-    if token in stopwords:
-        return True
-    if token.endswith(("وك", "ها", "هم", "كم")):
-        return True
-    return bool(re.match(r"^ت[\u0621-\u064A]{3,}ه$", token))
-
-
-@dataclass(frozen=True)
-class AttendeeAnonymizationRules:
-    placeholder: str
-    kinship_nouns: frozenset[str]
-    kunya_prefixes: frozenset[str]
-    title_prefixes: frozenset[str]
-    exempt_names: frozenset[str]
-    kinship_stopwords: frozenset[str] = field(
-        default_factory=lambda: KINSHIP_GRAMMATICAL_STOPWORDS
-    )
-    vocative_stopwords: frozenset[str] = field(
-        default_factory=lambda: VOCATIVE_GRAMMATICAL_STOPWORDS
-    )
-
-    known_attendee_names: frozenset[str] = field(
-        default_factory=lambda: BASE_KNOWN_ATTENDEE_NAMES
-    )
-
-    def is_vocative_non_name(self, token: str) -> bool:
-        return _is_vocative_grammatical_non_name(token, self.vocative_stopwords)
-
-    def find_leaks(self, text: str) -> list[tuple[str, str]]:
-        """Scans stripped prose for unanonymized kinship, classroom vocative, and illustration attendee references."""
-        all_prefixes = sorted(self.kunya_prefixes | self.title_prefixes, key=len, reverse=True)
-        prefix_alt = "|".join(re.escape(p) for p in all_prefixes)
-        kinship_alt = "|".join(
-            re.escape(k) for k in sorted(self.kinship_nouns, key=len, reverse=True)
-        )
-        prefix_group = rf"(?:(?:{prefix_alt})\s+)*" if prefix_alt else ""
-        voc_prefix_group = rf"(?:(?P<prefix>{prefix_alt})\s+)?" if prefix_alt else ""
-
-        leaks: list[tuple[str, str]] = []
-        matched_spans: list[tuple[int, int]] = []
-
-        def _overlaps(start: int, end: int) -> bool:
-            return any(max(start, s) < min(end, e) for s, e in matched_spans)
-
-        if kinship_alt:
-            kinship_re = re.compile(
-                rf"(?<!\w)[وف]?(?:{kinship_alt})\s+(?P<prefixes>{prefix_group})(?P<cand>[\u0621-\u064A]{{3,}})(?!\w)"
-            )
-            for m_kin in kinship_re.finditer(text):
-                cand = m_kin.group("cand")
-                prefix_tokens = m_kin.group("prefixes").split()
-                has_kunya = any(p in self.kunya_prefixes for p in prefix_tokens)
-                if cand == self.placeholder:
-                    continue
-                if not has_kunya and (cand in self.exempt_names or cand in self.kinship_stopwords):
-                    continue
-                matched_spans.append((m_kin.start(), m_kin.end()))
-                leaks.append(("reference", m_kin.group(0)))
-
-        vocative_re = re.compile(
-            rf"(?<!\w)[وف]?(?P<trig>ولا\s+(?:إيه|ايه)|إيه|ايه|ها|قول|اتفضل|تفضل|نعم|ماشي|صح|فاهم)\s+يا\s+"
-            rf"{voc_prefix_group}(?P<cand>[\u0621-\u064A]{{3,}})(?!\w)"
-        )
-        for m_voc in vocative_re.finditer(text):
-            cand = m_voc.group("cand")
-            prefix = m_voc.groupdict().get("prefix")
-            trig = m_voc.group("trig").strip()
-            if cand == self.placeholder:
-                continue
-            if prefix and prefix in self.kunya_prefixes:
-                # Exempt Egyptian rhetorical topical echo: '<word> إيه يا أبو <word>'
-                pre_window = text[max(0, m_voc.start() - 35) : m_voc.start()]
-                if trig in ("إيه", "ايه") and re.search(
-                    rf"(?<!\w)(?:[وفبكل]?ال|[وفبكل])?{re.escape(cand)}(?!\w)", pre_window
-                ):
-                    continue
-                if not _overlaps(m_voc.start(), m_voc.end()):
-                    matched_spans.append((m_voc.start(), m_voc.end()))
-                    leaks.append(("vocative", m_voc.group(0)))
-                continue
-            if cand in self.exempt_names or cand in self.title_prefixes or self.is_vocative_non_name(cand):
-                continue
-            if not _overlaps(m_voc.start(), m_voc.end()):
-                matched_spans.append((m_voc.start(), m_voc.end()))
-                leaks.append(("vocative", m_voc.group(0)))
-
-        cand_names = sorted(
-            [n for n in self.known_attendee_names if n != self.placeholder and n not in self.exempt_names],
-            key=len,
-            reverse=True,
-        )
-        if cand_names:
-            cand_alt = "|".join(re.escape(n) for n in cand_names)
-
-            # Bare vocatives without conversational triggers for known attendees
-            quote_spans = [(m.start(), m.end()) for m in re.finditer(r'«[^»]*»|"[^"]*"', text)]
-            bare_voc_re = re.compile(
-                rf"(?<!\w)[وف]?(?:يا|يَا)\s+{prefix_group}(?P<cand>{cand_alt})(?!\w)"
-            )
-            for m_bvoc in bare_voc_re.finditer(text):
-                if _overlaps(m_bvoc.start(), m_bvoc.end()):
-                    continue
-                if any(qs <= m_bvoc.start() and m_bvoc.end() <= qe for qs, qe in quote_spans):
-                    continue
-                tail_stripped = strip_tashkeel(text[m_bvoc.end():])
-                if re.match(r"^\s*(?:بن|ابن)\s+[\u0621-\u064A]{2,}", tail_stripped):
-                    continue
-                matched_spans.append((m_bvoc.start(), m_bvoc.end()))
-                leaks.append(("vocative", m_bvoc.group(0)))
-
-            # Classroom illustrations & third-person references for known attendees
-            illustration_patterns = [
-                re.compile(
-                    rf"(?<!\w){prefix_group}(?P<cand>{cand_alt})\s+{ILLUSTRATION_ACTIONS}(?!\w)"
-                ),
-                re.compile(
-                    rf"(?<!\w)(?:مثل[اً]?|زي)\s*:\s*{prefix_group}(?P<cand>{cand_alt})(?!\w)"
-                ),
-                re.compile(
-                    rf"(?<!\w)زي\s+ما\s+(?:قال[ت]?|ب?[يت]قول)\s+{prefix_group}(?P<cand>{cand_alt})(?!\w)"
-                ),
-            ]
-            for pat in illustration_patterns:
-                for m_ill in pat.finditer(text):
-                    if _overlaps(m_ill.start(), m_ill.end()):
-                        continue
-                    matched_spans.append((m_ill.start(), m_ill.end()))
-                    leaks.append(("reference", m_ill.group(0)))
-
-        return leaks
-
-
-def load_attendee_anonymization_rules(
-    rules_path: Path | str | None = None,
-) -> AttendeeAnonymizationRules:
-    """Dynamically parses Attendee Anonymization SSOT (exempt names, titles, kunyas, known attendees) from references/dialect-rules.md."""
-    path = Path(rules_path) if rules_path else DEFAULT_DIALECT_RULES_PATH
-    placeholder = "فلان"
-    kinship_nouns: set[str] = set()
-    kunya_prefixes: set[str] = set()
-    title_prefixes: set[str] = set()
-    exempt_names: set[str] = set()
-    known_attendee_names: set[str] = set(BASE_KNOWN_ATTENDEE_NAMES)
-
-    if not path.exists():
-        warnings.warn(
-            f"Dialect rules file not found at {path}; using baseline attendee anonymization rules.",
-            UserWarning,
-            stacklevel=2,
-        )
-        return AttendeeAnonymizationRules(
-            placeholder=placeholder,
-            kinship_nouns=BASE_KINSHIP_NOUNS,
-            kunya_prefixes=BASE_KUNYA_PREFIXES,
-            title_prefixes=BASE_TITLE_PREFIXES,
-            exempt_names=BASE_EXEMPT_NAMES,
-            kinship_stopwords=KINSHIP_GRAMMATICAL_STOPWORDS,
-            vocative_stopwords=VOCATIVE_GRAMMATICAL_STOPWORDS,
-            known_attendee_names=BASE_KNOWN_ATTENDEE_NAMES,
-        )
-
-    text = path.read_text(encoding="utf-8")
-    header_m = re.search(r"^##\s+Attendee Anonymization\s*\(([\u0621-\u064A]+)\)", text, re.MULTILINE)
-    if header_m:
-        placeholder = header_m.group(1)
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if "Preserved Titles & Kunyas" in stripped:
-            clean_line = stripped.replace("**", "")
-            for tok in re.findall(rf"([\u0621-\u064A]+)\s+{re.escape(placeholder)}(?!\w)", clean_line):
-                if tok == "يا":
-                    continue
-                dehamza = normalize_arabic(tok)
-                if dehamza.startswith("اخو"):
-                    kinship_nouns.update({"أخوكم", "اخوكم", "أخونا", "اخونا", tok, dehamza})
-                elif dehamza in ("الاخ", "الاخت"):
-                    kinship_nouns.update({tok, dehamza})
-                elif dehamza in ("ابو", "ابا"):
-                    hamza_form = f"أ{dehamza[1:]}"
-                    kunya_prefixes.update({tok, dehamza, hamza_form})
-                else:
-                    base = tok[2:] if tok.startswith("ال") and len(tok) >= 5 else tok
-                    definite = tok if tok.startswith("ال") else f"ال{tok}"
-                    title_prefixes.update({
-                        base,
-                        definite,
-                        normalize_arabic(base),
-                        normalize_arabic(definite),
-                    })
-        elif "Preserved Non-Attendee Names" in stripped:
-            for grp in re.findall(r"\(([^)]+)\)", stripped):
-                exempt_names.update(re.findall(r"[\u0621-\u064A]+", grp))
-        elif "Known Attendee Names" in stripped:
-            parsed_known: set[str] = set()
-            for grp in re.findall(r"\(([^)]+)\)", stripped):
-                parsed_known.update(re.findall(r"[\u0621-\u064A]+", grp))
-            if parsed_known:
-                known_attendee_names = parsed_known
-
-    if not kinship_nouns or not kunya_prefixes or not title_prefixes or not exempt_names:
-        warnings.warn(
-            f"Attendee anonymization rules parsed from {path} produced empty rule set(s); falling back to baseline rules.",
-            UserWarning,
-            stacklevel=2,
-        )
-        if not kinship_nouns:
-            kinship_nouns.update(BASE_KINSHIP_NOUNS)
-        if not kunya_prefixes:
-            kunya_prefixes.update(BASE_KUNYA_PREFIXES)
-        if not title_prefixes:
-            title_prefixes.update(BASE_TITLE_PREFIXES)
-        if not exempt_names:
-            exempt_names.update(BASE_EXEMPT_NAMES)
-
-    return AttendeeAnonymizationRules(
-        placeholder=placeholder,
-        kinship_nouns=frozenset(kinship_nouns),
-        kunya_prefixes=frozenset(kunya_prefixes),
-        title_prefixes=frozenset(title_prefixes),
-        exempt_names=frozenset(exempt_names),
-        kinship_stopwords=KINSHIP_GRAMMATICAL_STOPWORDS,
-        vocative_stopwords=VOCATIVE_GRAMMATICAL_STOPWORDS,
-        known_attendee_names=frozenset(known_attendee_names),
-    )
-
-
 def _check_dialect_and_dialogue(
     para_records: list[ParagraphRecord],
     report: ValidationReport,
-    dialect_rules: list[tuple[re.Pattern, str]] | None = None,
+    dialect_rules: list[tuple[re.Pattern, str]] | tuple[tuple[re.Pattern, str], ...] | None = None,
     dialect_rules_path: Path | str | None = None,
+    catalog: RuleCatalog | None = None,
 ) -> None:
-    rules = dialect_rules if dialect_rules is not None else load_dialect_replacements(dialect_rules_path)
-    attendee_rules = load_attendee_anonymization_rules(dialect_rules_path)
+    active_catalog = (
+        catalog
+        if catalog is not None
+        else RuleCatalog.load(dialect_rules_path=dialect_rules_path)
+    )
+    rules = dialect_rules if dialect_rules is not None else active_catalog.dialect_replacements
+    attendee_rules = active_catalog.attendee_rules
 
     for rec in para_records:
         if rec.index < HEADER_LINE_COUNT:
@@ -1051,21 +712,28 @@ FALLBACK_MATN_TRIGGERS: list[tuple[str, re.Pattern]] = [
 ]
 
 
-def _has_colloquial_marker(text: str) -> bool:
+def _has_colloquial_marker(
+    text: str,
+    dialect_markers: frozenset[str] | set[str] | None = None,
+) -> bool:
+    markers = dialect_markers if dialect_markers is not None else RuleCatalog.load().dialect_markers
     plain = strip_tashkeel(text)
     if re.search(r"(?<!\w)هو\s+[\u0600-\u06FF\s]+\s+ولا\s+", plain):
         return True
     words = re.findall(r"[\u0600-\u06FF]+", plain)
     for w in words:
         w_norm = normalize_arabic(w)
-        if w in DIALECT_MARKERS or w_norm in DIALECT_MARKERS:
+        if w in markers or w_norm in markers:
             return True
         if w.startswith(("هت", "هي", "بي", "بت", "ما")) and w.endswith("ش") and len(w) >= 4:
             return True
     return False
 
 
-def _extract_leading_classical_clause(candidate: str) -> str:
+def _extract_leading_classical_clause(
+    candidate: str,
+    dialect_markers: frozenset[str] | set[str] | None = None,
+) -> str:
     """Extracts consecutive leading Classical Arabic sub-clauses before any colloquial shift."""
     # Split on parenthetical colloquial glosses or commas
     sub_clauses = re.split(r"https?://|\s*-\s*يعني\s+|[،]", candidate)
@@ -1074,7 +742,7 @@ def _extract_leading_classical_clause(candidate: str) -> str:
         sub_clean = sub.strip(" .؟!:-")
         if not sub_clean:
             continue
-        if _has_colloquial_marker(sub_clean):
+        if _has_colloquial_marker(sub_clean, dialect_markers):
             break
         classical_parts.append(sub_clean)
     return "، ".join(classical_parts)
@@ -1083,6 +751,7 @@ def _extract_leading_classical_clause(candidate: str) -> str:
 def _check_unbolded_fallback_matn(
     para_records: list[ParagraphRecord],
     report: ValidationReport,
+    dialect_markers: frozenset[str] | set[str] | None = None,
 ) -> None:
     """Detects candidate unbolded Classical Arabic Sharh/Matn clauses inside explanation paragraphs."""
     for rec in para_records:
@@ -1095,9 +764,9 @@ def _check_unbolded_fallback_matn(
         for label, pat in FALLBACK_MATN_TRIGGERS:
             for m in pat.finditer(stripped):
                 cand = m.group(1).strip()
-                core_clause = _extract_leading_classical_clause(cand)
+                core_clause = _extract_leading_classical_clause(cand, dialect_markers)
                 words = re.findall(r"[\u0600-\u06FF]+", core_clause)
-                if len(words) >= 4 and not _has_colloquial_marker(core_clause):
+                if len(words) >= 4 and not _has_colloquial_marker(core_clause, dialect_markers):
                     _flag(
                         report,
                         "UNBOLDED_FALLBACK_MATN",
@@ -1339,16 +1008,33 @@ def verify_docx(
     matn_path: Path | str | None = None,
     context_path: Path | str | None = None,
     dialect_rules_path: Path | str | None = None,
+    *,
+    workspace: WorkspaceConfig | None = None,
+    catalog: RuleCatalog | None = None,
 ) -> ValidationReport:
     docx_path = Path(docx_path)
     report = ValidationReport(docx_path=str(docx_path))
     doc = docx.Document(str(docx_path))
 
+    active_catalog = (
+        catalog
+        if catalog is not None
+        else RuleCatalog.load(
+            context_path=context_path,
+            dialect_rules_path=dialect_rules_path,
+            workspace=workspace,
+        )
+    )
+
     para_records = _check_ooxml_styling(doc, report)
-    _check_headers_and_conclusion(doc, para_records, report, context_path=context_path)
+    _check_headers_and_conclusion(doc, para_records, report, catalog=active_catalog)
     _check_punctuation_and_orthography(para_records, report)
-    _check_dialect_and_dialogue(para_records, report, dialect_rules_path=dialect_rules_path)
-    _check_unbolded_fallback_matn(para_records, report)
+    _check_dialect_and_dialogue(para_records, report, catalog=active_catalog)
+    _check_unbolded_fallback_matn(
+        para_records,
+        report,
+        dialect_markers=active_catalog.dialect_markers,
+    )
     if matn_path:
         _check_matn_alignment(para_records, Path(matn_path), report)
     if raw_path:

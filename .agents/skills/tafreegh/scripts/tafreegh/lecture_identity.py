@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from .arabic_normalizer import normalize_arabic, normalize_arabic_token
+from .workspace_catalog import RuleCatalog
 
 # Ensure UTF-8 output
 if hasattr(sys.stdout, 'reconfigure'):
@@ -29,156 +30,14 @@ def normalize_stem(candidate_name: str) -> str:
     return s.strip()
 
 
-def _resolve_context_file(context_path: Path | None = None) -> Path | None:
-    """Finds CONTEXT.md in explicit path or ascending repository directories."""
-    if context_path and Path(context_path).exists():
-        return Path(context_path)
-    
-    # 1. Traverse up from current script location
-    for p in Path(__file__).resolve().parents:
-        cand = p / "CONTEXT.md"
-        if cand.exists() and cand.is_file():
-            return cand
-
-    # 2. Traverse up from current working directory
-    for p in [Path.cwd(), *Path.cwd().parents]:
-        cand = p / "CONTEXT.md"
-        if cand.exists() and cand.is_file():
-            return cand
-
-    return None
-
-
-def load_canonical_routing(context_path: Path | None = None) -> dict[str, str]:
-    """
-    Dynamically parses Section 3 Routing Map from CONTEXT.md as the single source of truth.
-    Returns mapping from keyword variations to canonical subject names.
-    """
-    file_path = _resolve_context_file(context_path)
-    routing_map: dict[str, str] = {}
-    
-    if not file_path:
-        return routing_map
-
-    content = file_path.read_text(encoding="utf-8")
-    lines = content.splitlines()
-    has_section_3 = any(line.strip().startswith("## 3.") or "توجيه المتون" in line for line in lines)
-    in_section_3 = False
-    in_table = False
-
-    kw_col_idx = 0
-    subj_col_idx = 1
-    header_found = False
-
-    for line in lines:
-        stripped = line.strip()
-        if has_section_3:
-            if stripped.startswith("## 3.") or "توجيه المتون" in stripped:
-                in_section_3 = True
-                continue
-            if in_section_3 and stripped.startswith("## "):
-                # Left Section 3
-                break
-            if not in_section_3:
-                continue
-
-        if not (stripped.startswith("|") and stripped.endswith("|")):
-            if in_table:
-                # End of table block
-                break
-            continue
-
-        cells = [c.strip() for c in re.split(r"(?<!\\)\|", stripped)[1:-1]]
-        if not cells:
-            continue
-
-        # Check for markdown table separator row: | --- | --- |
-        if all(re.match(r"^:?-+:?$", c) for c in cells):
-            in_table = True
-            continue
-
-        # Dynamic header detection
-        if not header_found:
-            found_kw = None
-            found_subj = None
-            for idx, cell in enumerate(cells):
-                norm_c = normalize_arabic(cell)
-                if any(w in norm_c for w in ("الكلمة", "الدلالية", "keyword")):
-                    found_kw = idx
-                elif any(w in norm_c for w in ("المادة", "المعتمدة", "subject")):
-                    found_subj = idx
-            if found_kw is not None or found_subj is not None:
-                header_found = True
-                in_table = True
-                if found_kw is not None:
-                    kw_col_idx = found_kw
-                if found_subj is not None:
-                    subj_col_idx = found_subj
-                continue
-
-        in_table = True
-        keyword_cell = cells[kw_col_idx] if kw_col_idx < len(cells) else cells[0]
-        subject_cell = cells[subj_col_idx] if subj_col_idx < len(cells) else (cells[1] if len(cells) > 1 else cells[0])
-
-        # Extract bold text if present: **subject**
-        bold_match = re.search(r"\*\*([^*]+)\*\*", subject_cell)
-        if bold_match:
-            canonical_name = bold_match.group(1).strip()
-        else:
-            # Fallback: clean parenthesized notes if any
-            clean_sub = re.sub(r"\s*\(للإمام[^)]*\)", "", subject_cell)
-            clean_sub = re.sub(r"\s*\(للشيخ[^)]*\)", "", clean_sub)
-            canonical_name = clean_sub.strip()
-
-        # Extract individual keyword tokens from keyword_cell
-        # Example formats: `(زاد)` / `(زاد المعاد)`, `(بيوع)` / `(فقه_البيوع)` / `(خثلان)`
-        raw_tokens = re.findall(r"`?\(?([^`()/]+)\)?`?", keyword_cell)
-        tokens: list[str] = []
-        for t in raw_tokens:
-            cleaned_t = t.strip("`() /")
-            if cleaned_t:
-                tokens.append(cleaned_t)
-
-        for token in tokens:
-            routing_map[token] = canonical_name
-            routing_map[normalize_arabic(token)] = canonical_name
-
-            # Underscore / Space variants
-            if "_" in token:
-                space_v = token.replace("_", " ").strip()
-                routing_map[space_v] = canonical_name
-                routing_map[normalize_arabic(space_v)] = canonical_name
-            if " " in token:
-                under_v = token.replace(" ", "_").strip()
-                routing_map[under_v] = canonical_name
-                routing_map[normalize_arabic(under_v)] = canonical_name
-
-            # Definite article (الـ) variant
-            norm_token = normalize_arabic(token)
-            if not norm_token.startswith("ال"):
-                al_v = f"ال{token}"
-                routing_map[al_v] = canonical_name
-                routing_map[normalize_arabic(al_v)] = canonical_name
-
-        # Map canonical name to itself
-        routing_map[canonical_name] = canonical_name
-        routing_map[normalize_arabic(canonical_name)] = canonical_name
-
-    return routing_map
-
-
-# Module-level routing dictionary dynamically loaded from CONTEXT.md
-CANONICAL_ROUTING: dict[str, str] = load_canonical_routing()
-
-
 def match_canonical_subject(
     text: str,
-    routing_map: dict[str, str] | None = None,
+    routing_map: Mapping[str, str] | None = None,
 ) -> tuple[str | None, str | None]:
     """Matches text against canonical routing in descending length order."""
     if not text:
         return None, None
-    rm = routing_map if routing_map is not None else CANONICAL_ROUTING
+    rm = routing_map if routing_map is not None else RuleCatalog.load().routing_map
     norm_text = normalize_arabic(text)
     for key in sorted(rm.keys(), key=len, reverse=True):
         if normalize_arabic(key) in norm_text:
@@ -292,7 +151,7 @@ class LectureIdentity:
     def matches(
         self,
         candidate_name: str,
-        routing_map: dict[str, str] | None = None,
+        routing_map: Mapping[str, str] | None = None,
     ) -> bool:
         """
         Determines if candidate_name matches this lecture's identity,
@@ -304,7 +163,7 @@ class LectureIdentity:
         if self.stem and normalize_stem(self.stem) == cleaned_cand:
             return True
 
-        rm = routing_map if routing_map is not None else CANONICAL_ROUTING
+        rm = routing_map if routing_map is not None else RuleCatalog.load().routing_map
 
         seed_tokens: set[str] = set()
         if self.keyword:
@@ -366,7 +225,7 @@ class LectureIdentity:
     def from_metadata(
         cls,
         meta: dict | LectureIdentity,
-        routing_map: dict[str, str] | None = None,
+        routing_map: Mapping[str, str] | None = None,
     ) -> LectureIdentity:
         """Constructs LectureIdentity from metadata dict or existing instance."""
         if isinstance(meta, LectureIdentity):
@@ -384,13 +243,13 @@ class LectureIdentity:
     def from_text(
         cls,
         text: str,
-        routing_map: dict[str, str] | None = None,
+        routing_map: Mapping[str, str] | None = None,
     ) -> LectureIdentity:
         """
         Extracts date, keyword, audio_file, clean canonical subject_name,
         and lecture_number from markdown text, filenames, or raw transcript headers.
         """
-        rm = routing_map if routing_map is not None else CANONICAL_ROUTING
+        rm = routing_map if routing_map is not None else RuleCatalog.load().routing_map
         identity = cls()
 
         # 1. Date extraction (YYYY-MM-DD)
@@ -472,7 +331,7 @@ class LectureIdentity:
         cls,
         filename: str,
         fallback_subject: str | None = None,
-        routing_map: dict[str, str] | None = None,
+        routing_map: Mapping[str, str] | None = None,
     ) -> LectureIdentity:
         """Parses identity from a standalone filename."""
         cleaned = normalize_stem(filename)

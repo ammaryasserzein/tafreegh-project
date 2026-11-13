@@ -12,29 +12,21 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 from .arabic_normalizer import normalize_arabic
-from .lecture_identity import LectureIdentity, load_canonical_routing
+from .lecture_identity import LectureIdentity
 from .matn_matcher import (
     MatchMode,
     MatnMatchResult,
     SequentialMatnMatcher,
     generate_fallback_summary,
 )
+from .workspace_catalog import RuleCatalog, WorkspaceConfig
 
 # Ensure UTF-8 output
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-# Dynamic single source of truth from CONTEXT.md Section 3
-CANONICAL_SUBJECT_NAMES = load_canonical_routing()
-
-DEFAULT_BASE_ONEDRIVE = Path(r"C:\Users\L\OneDrive\1. دوري")
-DEFAULT_PROJECT_ROOT = Path(r"c:\Users\L\Documents\Tafreegh_Project")
-WORD_BASE_TEMPLATE = DEFAULT_PROJECT_ROOT / "Word base.docx"
 DEFAULT_FONT_NAME = "Traditional Arabic"
 DEFAULT_FONT_SIZE = 18
-DEFAULT_DIALECT_RULES_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "references" / "dialect-rules.md"
-)
 
 NOTEBOOKLM_HEADER_PATTERNS = [
     re.compile(r'^(?:المصادر|مصادر|المصدر|دليل المصدر|دليل مصادر)$', re.IGNORECASE),
@@ -44,45 +36,37 @@ NOTEBOOKLM_HEADER_PATTERNS = [
 ]
 
 
-def parse_metadata(text: str) -> LectureIdentity:
+def parse_metadata(
+    text: str,
+    catalog: RuleCatalog | None = None,
+) -> LectureIdentity:
     """
     Extracts date, keyword, audio_file, clean canonical subject_name,
     and lecture_number from markdown text, filenames, or raw transcript headers.
     Returns a LectureIdentity domain entity with dict compatibility.
     """
-    return LectureIdentity.from_text(text, routing_map=CANONICAL_SUBJECT_NAMES)
+    active_catalog = catalog if catalog is not None else RuleCatalog.load()
+    return LectureIdentity.from_text(text, routing_map=active_catalog.routing_map)
 
 
-KEYWORD_FOLDER_HINTS = {
-    "دليل": "معاملات",
-    "دليل الطالب": "معاملات",
-    "رحيق": "سيرة",
-    "سلم": "منطق",
-    "السلم": "منطق",
-    "فتح": "توحيد",
-    "فتح الباري": "توحيد",
-    **{k: CANONICAL_SUBJECT_NAMES[k] for k in CANONICAL_SUBJECT_NAMES if "بيوع" in k or "خثلان" in k},
-}
-
-def get_onedrive_folder(keyword: str, base_path: Path = DEFAULT_BASE_ONEDRIVE) -> Path:
+def get_onedrive_folder(
+    keyword: str,
+    base_path: Path | None = None,
+    *,
+    catalog: RuleCatalog | None = None,
+    workspace: WorkspaceConfig | None = None,
+) -> Path:
     """
     Returns the target OneDrive folder Path for a given discipline keyword.
-    Scans the base_path dynamically to find a matching folder.
+    Scans the base_path dynamically using catalog course alias groups.
     """
-    cleaned = normalize_arabic(keyword)
-    if not cleaned:
-        return base_path / "عام"
-        
-    k_search = KEYWORD_FOLDER_HINTS.get(cleaned, cleaned)
-    if base_path.exists() and base_path.is_dir():
-        k_clean = normalize_arabic(k_search)
-        for d in base_path.iterdir():
-            if d.is_dir():
-                d_name_clean = normalize_arabic(d.name)
-                if k_clean in d_name_clean:
-                    return d
-                    
-    return base_path / k_search
+    resolved_base = (
+        Path(base_path)
+        if base_path is not None
+        else (workspace or WorkspaceConfig.resolve()).onedrive_base
+    )
+    active_catalog = catalog if catalog is not None else RuleCatalog.load(workspace=workspace)
+    return active_catalog.resolve_onedrive_folder(keyword, resolved_base)
 
 
 def is_header_line(line: str) -> bool:
@@ -114,13 +98,15 @@ def resolve_header_line_3(identity: LectureIdentity) -> str:
 def resolve_document_identity(
     markdown_text: str,
     identity: LectureIdentity | None = None,
+    *,
+    catalog: RuleCatalog | None = None,
 ) -> LectureIdentity:
     """
     Parses transcript metadata and merges explicit caller overrides.
     If caller explicitly provided a lecture_number override without a date,
     prioritizes numbered lecture formatting over parsed text date.
     """
-    parsed = parse_metadata(markdown_text)
+    parsed = parse_metadata(markdown_text, catalog=catalog)
     if identity:
         ident = parsed.merge(identity)
         if identity.lecture_number and not identity.date:
@@ -132,12 +118,14 @@ def resolve_document_identity(
 def standardize_transcript_header(
     markdown_text: str,
     identity: LectureIdentity | None = None,
+    *,
+    catalog: RuleCatalog | None = None,
 ) -> str:
     """
     Strips NotebookLM tags (Source guide, audio file names, etc.) and existing headers,
     returning cleanly standardized markdown beginning with the 3-line centered header.
     """
-    ident = resolve_document_identity(markdown_text, identity)
+    ident = resolve_document_identity(markdown_text, identity, catalog=catalog)
     clean_subject = ident.resolved_subject
     third_line = ident.header_line_3
     
@@ -236,8 +224,11 @@ def _strip_hybrid_summary(markdown_text: str) -> str:
 def create_docx(
     markdown_text: str,
     output_path: Path,
-    template_path: Path = WORD_BASE_TEMPLATE,
+    template_path: Path | None = None,
     identity: LectureIdentity | None = None,
+    *,
+    workspace: WorkspaceConfig | None = None,
+    catalog: RuleCatalog | None = None,
 ) -> Path:
     """
     Converts scholarly transcription markdown into a formatted .docx document.
@@ -251,8 +242,13 @@ def create_docx(
     markdown_text = re.sub(r'`([^`]*[\u0600-\u06FF]+[^`]*)`', r'\1', markdown_text)
     markdown_text = _strip_hybrid_summary(markdown_text)
 
-    if template_path and Path(template_path).exists():
-        doc = docx.Document(str(template_path))
+    resolved_template = (
+        Path(template_path)
+        if template_path is not None
+        else (workspace or WorkspaceConfig.resolve()).word_base_template
+    )
+    if resolved_template and resolved_template.exists():
+        doc = docx.Document(str(resolved_template))
         p_elements = doc._body._element.xpath('./w:p')
         for p in p_elements:
             doc._body._element.remove(p)
@@ -265,7 +261,7 @@ def create_docx(
         s.left_margin = Inches(0.5)
         s.right_margin = Inches(0.5)
         
-    ident = resolve_document_identity(markdown_text, identity)
+    ident = resolve_document_identity(markdown_text, identity, catalog=catalog)
     clean_subject = ident.resolved_subject
     third_line = ident.header_line_3
     
@@ -384,18 +380,24 @@ def format_thousands(text: str) -> str:
 def is_matching_stem(
     candidate_name: str,
     identity: LectureIdentity,
+    *,
+    catalog: RuleCatalog | None = None,
 ) -> bool:
     """
     Returns True if candidate_name matches the given lecture identifier,
     supporting exact stem matches, date matches, and mirrored numbered stems
     per ADR 0002 § 9, ADR 0004, and ADR 0005.
     """
-    return identity.matches(candidate_name, routing_map=CANONICAL_SUBJECT_NAMES)
+    active_catalog = catalog if catalog is not None else RuleCatalog.load()
+    return identity.matches(candidate_name, routing_map=active_catalog.routing_map)
 
 
 def archive_processed_inputs(
     identity: LectureIdentity,
-    project_root: Path = DEFAULT_PROJECT_ROOT,
+    project_root: Path | None = None,
+    *,
+    workspace: WorkspaceConfig | None = None,
+    catalog: RuleCatalog | None = None,
 ) -> dict:
     """
     Moves matching raw inputs and matn sources into processed/ subfolders,
@@ -403,29 +405,34 @@ def archive_processed_inputs(
     03_AI_Outputs remains flat and untouched.
     """
     ident = identity
-    project_root = Path(project_root)
-    matn_dir = project_root / "01_Matn_Sources"
-    raw_dir = project_root / "02_Raw_Inputs"
-    
+    active_workspace = (
+        workspace if workspace is not None else WorkspaceConfig.resolve(project_root=project_root)
+    )
+    active_catalog = (
+        catalog if catalog is not None else RuleCatalog.load(workspace=active_workspace)
+    )
+    matn_dir = active_workspace.matn_sources_dir
+    raw_dir = active_workspace.raw_inputs_dir
+
     matn_processed = matn_dir / "processed"
     raw_processed = raw_dir / "processed"
     matn_processed.mkdir(parents=True, exist_ok=True)
     raw_processed.mkdir(parents=True, exist_ok=True)
-    
+
     archived_matn = []
     archived_raw = []
     deleted_chunks = []
-    
+
     if matn_dir.exists():
         for item in matn_dir.iterdir():
-            if item.is_file() and ident.matches(item.name, routing_map=CANONICAL_SUBJECT_NAMES):
+            if item.is_file() and ident.matches(item.name, routing_map=active_catalog.routing_map):
                 dest = matn_processed / item.name
                 shutil.move(str(item), str(dest))
                 archived_matn.append(dest)
-                
+
     if raw_dir.exists():
         for item in raw_dir.iterdir():
-            if ident.matches(item.name, routing_map=CANONICAL_SUBJECT_NAMES):
+            if ident.matches(item.name, routing_map=active_catalog.routing_map):
                 if item.is_dir() and "_مقاطع" in item.name:
                     shutil.rmtree(str(item))
                     deleted_chunks.append(item)
@@ -433,99 +440,61 @@ def archive_processed_inputs(
                     dest = raw_processed / item.name
                     shutil.move(str(item), str(dest))
                     archived_raw.append(dest)
-                    
+
     return {
         "matn_files": archived_matn,
         "raw_files": archived_raw,
-        "deleted_chunk_dirs": deleted_chunks
+        "deleted_chunk_dirs": deleted_chunks,
     }
 
 
-BASE_DIALECT_MARKERS: frozenset[str] = frozenset({
-    "كدا", "كده", "ده", "دا", "دي", "ايه", "إيه", "ازاي", "ازاى", "احنا", "إحنا",
-    "برضه", "برضو", "علطول", "أومال", "امال", "مش", "عشان", "علشان", "بقى",
-    "مفيش", "مافيش", "مكانش", "ماكانش", "حد", "تاني", "قوي", "خالص", "يلا",
-    "طب", "طيب", "يعني", "حاجة", "بتاع", "اللي", "دلوقتي", "عاوز", "عايز", "عايزة",
-    "بيقول", "يقولوا", "شوية", "تلاقي", "طبعا", "أهو", "اهو", "يبقى", "ماشي", "بقول",
-    "ولواحد",
-})
-
-
-def load_dialect_markers(rules_path: Path | str | None = None) -> set[str]:
-    """Dynamically loads colloquial markers from references/dialect-rules.md.
-
-    Parses markers from the 'Colloquial Lexicon & Verbal Markers' section of the SSOT.
-    Augments with BASE_DIALECT_MARKERS as fallback or baseline guarantee.
-    """
-    path = Path(rules_path) if rules_path else DEFAULT_DIALECT_RULES_PATH
-    markers: set[str] = set()
-
-    if path.exists():
-        text = path.read_text(encoding="utf-8")
-        in_section = False
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("## "):
-                if "Colloquial Lexicon" in stripped:
-                    in_section = True
-                    continue
-                elif in_section:
-                    break
-            if in_section:
-                for bold_token in re.findall(r"\*\*([^*]+)\*\*", stripped):
-                    if not re.search(r"[\u0600-\u06FF]", bold_token):
-                        continue
-                    for word in re.findall(r"\w+", bold_token):
-                        if re.search(r"[\u0600-\u06FF]", word):
-                            markers.add(word.strip())
-
-    if not markers:
-        return set(BASE_DIALECT_MARKERS)
-
-    return markers | set(BASE_DIALECT_MARKERS)
-
-
-DIALECT_MARKERS: set[str] = load_dialect_markers()
-
-
-def verify_isolated_segment(text: str) -> bool:
+def verify_isolated_segment(text: str, *, catalog: RuleCatalog | None = None) -> bool:
     """Strict verification for isolated fallback segments.
     Returns True if segment passes strict verification (pure Classical Arabic),
     False if it contains dialect markers indicating Sheikh's commentary.
     """
     if not text:
         return False
+    active_catalog = catalog if catalog is not None else RuleCatalog.load()
     words = re.findall(r'\b\w+\b', normalize_arabic(text))
     for w in words:
-        if w in DIALECT_MARKERS:
+        if w in active_catalog.dialect_markers:
             return False
     return True
 
 
 def find_matching_matn_source(
     identity: LectureIdentity,
-    project_root: Path = DEFAULT_PROJECT_ROOT,
+    project_root: Path | None = None,
+    *,
+    workspace: WorkspaceConfig | None = None,
+    catalog: RuleCatalog | None = None,
 ) -> Path | None:
     """
     Locates a matching canonical Matn source file in 01_Matn_Sources/
     or 01_Matn_Sources/processed/ (if reprocessing).
     """
     ident = identity
-    project_root = Path(project_root)
-    matn_dir = project_root / "01_Matn_Sources"
+    active_workspace = (
+        workspace if workspace is not None else WorkspaceConfig.resolve(project_root=project_root)
+    )
+    active_catalog = (
+        catalog if catalog is not None else RuleCatalog.load(workspace=active_workspace)
+    )
+    matn_dir = active_workspace.matn_sources_dir
     if not matn_dir.exists():
         return None
 
     # Check unarchived sources first
     for item in matn_dir.iterdir():
-        if item.is_file() and ident.matches(item.name, routing_map=CANONICAL_SUBJECT_NAMES):
+        if item.is_file() and ident.matches(item.name, routing_map=active_catalog.routing_map):
             return item
 
     # Check processed/ subdirectory if reprocessing
     processed_dir = matn_dir / "processed"
     if processed_dir.exists():
         for item in processed_dir.iterdir():
-            if item.is_file() and ident.matches(item.name, routing_map=CANONICAL_SUBJECT_NAMES):
+            if item.is_file() and ident.matches(item.name, routing_map=active_catalog.routing_map):
                 return item
 
     return None
@@ -559,13 +528,18 @@ def _extract_candidate_query(inner_text: str) -> str:
     return inner
 
 
-def _format_segment_output(res: MatnMatchResult, is_standalone: bool = True) -> list[str] | str:
+def _format_segment_output(
+    res: MatnMatchResult,
+    is_standalone: bool = True,
+    *,
+    catalog: RuleCatalog | None = None,
+) -> list[str] | str:
     """Formats matched matn segment for markdown output based on match mode and context."""
     clean_text = res.text.strip()
     if res.mode == MatchMode.PRIMARY:
         return [f"**({clean_text})**"] if is_standalone else f"**({clean_text})**"
 
-    is_valid = res.is_sandwiched or verify_isolated_segment(res.text)
+    is_valid = res.is_sandwiched or verify_isolated_segment(res.text, catalog=catalog)
     if is_standalone:
         if is_valid:
             return ["<!-- fallback -->", f"**({clean_text})**"]
@@ -576,13 +550,19 @@ def _format_segment_output(res: MatnMatchResult, is_standalone: bool = True) -> 
         return f"({clean_text})"
 
 
-def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher) -> str:
+def interleave_matn_segments(
+    markdown_text: str,
+    matcher: SequentialMatnMatcher,
+    *,
+    catalog: RuleCatalog | None = None,
+) -> str:
     """
     Processes candidate matn segments through SequentialMatnMatcher,
     formatting primary matches as vowelized canonical text,
     and fallback matches with <!-- fallback --> comments.
     Applies context-dependent Conservative Doubt (sandwiched vs isolated).
     """
+    active_catalog = catalog if catalog is not None else RuleCatalog.load()
     paragraphs = markdown_text.split('\n\n')
     candidates: list[_CandidateItem] = []
 
@@ -664,7 +644,9 @@ def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher)
             )
             if standalone_cand:
                 if standalone_cand.result is not None:
-                    new_lines.extend(_format_segment_output(standalone_cand.result, is_standalone=True))
+                    new_lines.extend(
+                        _format_segment_output(standalone_cand.result, is_standalone=True, catalog=active_catalog)
+                    )
                 l_idx += 1
                 continue
 
@@ -676,7 +658,9 @@ def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher)
                 )
                 if next_cand:
                     if next_cand.result is not None:
-                        new_lines.extend(_format_segment_output(next_cand.result, is_standalone=True))
+                        new_lines.extend(
+                            _format_segment_output(next_cand.result, is_standalone=True, catalog=active_catalog)
+                        )
                     l_idx += 2
                     continue
 
@@ -690,7 +674,7 @@ def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher)
                 for c in line_cands_sorted:
                     start, end = c.inline_span
                     if c.result is not None:
-                        rep = _format_segment_output(c.result, is_standalone=False)
+                        rep = _format_segment_output(c.result, is_standalone=False, catalog=active_catalog)
                     else:
                         rep = cur_line[start:end]
                     cur_line = cur_line[:start] + rep + cur_line[end:]
@@ -708,14 +692,17 @@ def interleave_matn_segments(markdown_text: str, matcher: SequentialMatnMatcher)
 
 def export_documents(
     markdown_text: str,
-    original_md_path: Path = None,
-    keyword: str = None,
-    date: str = None,
-    base_onedrive: Path = DEFAULT_BASE_ONEDRIVE,
-    project_root: Path = DEFAULT_PROJECT_ROOT,
-    matn_source_path: Path = None,
+    original_md_path: Path | None = None,
+    keyword: str | None = None,
+    date: str | None = None,
+    base_onedrive: Path | None = None,
+    project_root: Path | None = None,
+    matn_source_path: Path | None = None,
     identity: LectureIdentity | None = None,
     overwrite: bool = False,
+    *,
+    workspace: WorkspaceConfig | None = None,
+    catalog: RuleCatalog | None = None,
 ) -> dict:
     """
     Exports a .docx to OneDrive and saves the AI baseline .md into 03_AI_Outputs.
@@ -723,12 +710,27 @@ def export_documents(
     Interleaves canonical Matn alignment via SequentialMatnMatcher if available.
     On confirmed export, atomically archives input files into processed/.
     """
-    project_root = Path(project_root)
+    active_workspace = (
+        workspace
+        if workspace is not None
+        else WorkspaceConfig.resolve(
+            project_root=project_root,
+            onedrive_base=base_onedrive,
+        )
+    )
+    active_catalog = (
+        catalog
+        if catalog is not None
+        else RuleCatalog.load(workspace=active_workspace)
+    )
     markdown_text = _strip_hybrid_summary(markdown_text)
-    ident = parse_metadata(markdown_text)
-    
+    ident = parse_metadata(markdown_text, catalog=active_catalog)
+
     if original_md_path:
-        path_ident = LectureIdentity.from_filename(Path(original_md_path).name)
+        path_ident = LectureIdentity.from_filename(
+            Path(original_md_path).name,
+            routing_map=active_catalog.routing_map,
+        )
         ident = ident.merge(path_ident)
 
     if identity:
@@ -740,22 +742,30 @@ def export_documents(
     clean_md = standardize_transcript_header(
         markdown_text,
         identity=ident,
+        catalog=active_catalog,
     )
     clean_md = format_thousands(clean_md)
-    
+
     # 1. Matn Matching & Interleaving
     target_matn_file = matn_source_path or find_matching_matn_source(
-        project_root=project_root, identity=ident
+        identity=ident,
+        workspace=active_workspace,
+        catalog=active_catalog,
     )
     matcher = None
     if target_matn_file and Path(target_matn_file).exists():
         matn_content = read_matn_source_content(target_matn_file)
         matcher = SequentialMatnMatcher(matn_content)
-        clean_md = interleave_matn_segments(clean_md, matcher)
+        clean_md = interleave_matn_segments(clean_md, matcher, catalog=active_catalog)
 
     # 2. Target OneDrive path (docx)
     used_keyword = ident.keyword or "عام"
-    onedrive_dir = get_onedrive_folder(used_keyword, base_onedrive)
+    onedrive_dir = get_onedrive_folder(
+        used_keyword,
+        active_workspace.onedrive_base,
+        catalog=active_catalog,
+        workspace=active_workspace,
+    )
     if ident.date:
         docx_filename = f"{ident.date}.docx"
     elif ident.resolved_stem:
@@ -764,7 +774,7 @@ def export_documents(
         docx_filename = f"{ident.lecture_number or 'تاريخ_غير_محدد'}.docx"
 
     onedrive_file = onedrive_dir / docx_filename
-    
+
     if onedrive_file.exists() and not overwrite:
         base_stem = f"{onedrive_file.stem} #AI"
         onedrive_file = onedrive_file.with_name(f"{base_stem}{onedrive_file.suffix}")
@@ -772,20 +782,22 @@ def export_documents(
         while onedrive_file.exists():
             onedrive_file = onedrive_file.with_name(f"{base_stem} ({counter}){onedrive_file.suffix}")
             counter += 1
-            
+
     create_docx(
         clean_md,
         onedrive_file,
         identity=ident,
+        workspace=active_workspace,
+        catalog=active_catalog,
     )
-    
+
     # 3. Target Project path (md)
-    project_dir = project_root / "03_AI_Outputs"
+    project_dir = active_workspace.ai_outputs_dir
     project_dir.mkdir(parents=True, exist_ok=True)
-    
+
     subject_part = ident.subject_name or used_keyword
     subject_clean = re.sub(r'[\\/*?:"<>|()]', "", subject_part).strip().replace(" ", "_")
-    
+
     if ident.date:
         project_file = project_dir / f"{ident.date}_{subject_clean}_AI.md"
     elif ident.resolved_stem:
@@ -798,19 +810,21 @@ def export_documents(
         summary_report = generate_fallback_summary(matcher)
         ai_md_content = f"{clean_md}\n\n{summary_report}\n"
     project_file.write_text(ai_md_content, encoding='utf-8')
-    
+
     # 4. Atomic archiving
     archived_info = None
     if onedrive_file.exists() and project_file.exists():
         archived_info = archive_processed_inputs(
-            project_root=project_root, identity=ident
+            identity=ident,
+            workspace=active_workspace,
+            catalog=active_catalog,
         )
-        
+
     return {
         "onedrive_file": onedrive_file,
         "project_file": project_file,
         "archived": archived_info,
-        "matcher": matcher
+        "matcher": matcher,
     }
 
 

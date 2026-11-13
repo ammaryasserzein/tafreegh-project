@@ -1,19 +1,16 @@
-import os
-import glob
-import re
+from __future__ import annotations
+
 import datetime
+import glob
+import os
+import re
+import sys
 from pathlib import Path
+
 from . import read_docx
 from .diff_cues import CueResult, detect_new_student_cues, format_cue_report
 from .lecture_identity import LectureIdentity
-
-ONEDRIVE_BASE = r"C:\Users\L\OneDrive\1. دوري"
-# Hardcoding the project root to avoid Arabic character mangling bugs in Python's resolve()
-PROJECT_ROOT = Path(r"C:\Users\L\Documents\Tafreegh_Project")
-TRAINING_DATA_DIR = PROJECT_ROOT / "04_Training_Data"
-# AI baseline files (_AI.md) may live in either directory
-AI_OUTPUTS_DIR = PROJECT_ROOT / "03_AI_Outputs"
-RAW_INPUTS_DIR = PROJECT_ROOT / "02_Raw_Inputs"
+from .workspace_catalog import RuleCatalog, WorkspaceConfig
 
 
 def _find_ai_baseline(
@@ -21,8 +18,17 @@ def _find_ai_baseline(
     subject: str = "",
     filename_stem: str = "",
     identity: LectureIdentity | None = None,
+    *,
+    workspace: WorkspaceConfig | None = None,
+    catalog: RuleCatalog | None = None,
 ) -> Path | None:
     """Search for the corresponding _AI.md baseline file in known directories using LectureIdentity."""
+    active_workspace = (
+        workspace if workspace is not None else WorkspaceConfig.resolve()
+    )
+    active_catalog = (
+        catalog if catalog is not None else RuleCatalog.load(workspace=active_workspace)
+    )
     ident = identity or LectureIdentity(
         date=date_str or None,
         stem=filename_stem or None,
@@ -39,7 +45,8 @@ def _find_ai_baseline(
     elif ident.date:
         candidate_names.append(f"{ident.date}_AI.md")
 
-    for directory in (AI_OUTPUTS_DIR, RAW_INPUTS_DIR):
+    search_dirs = (active_workspace.ai_outputs_dir, active_workspace.raw_inputs_dir)
+    for directory in search_dirs:
         if not directory.exists():
             continue
         for c_name in candidate_names:
@@ -48,15 +55,18 @@ def _find_ai_baseline(
                 return cand
 
     # Match via LectureIdentity domain matching
-    for directory in (AI_OUTPUTS_DIR, RAW_INPUTS_DIR):
+    for directory in search_dirs:
         if directory.exists():
             for f in directory.iterdir():
-                if f.name.endswith("_AI.md") and ident.matches(f.name):
+                if f.name.endswith("_AI.md") and ident.matches(
+                    f.name,
+                    routing_map=active_catalog.routing_map,
+                ):
                     return f
 
     # Fallback: search by date prefix in both dirs if date is known
     if ident.date:
-        for directory in (AI_OUTPUTS_DIR, RAW_INPUTS_DIR):
+        for directory in search_dirs:
             if directory.exists():
                 for f in directory.iterdir():
                     if f.name.startswith(ident.date) and f.name.endswith("_AI.md"):
@@ -64,32 +74,50 @@ def _find_ai_baseline(
     return None
 
 
-def main():
-    if not TRAINING_DATA_DIR.exists():
-        TRAINING_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    
-    # We are looking for C:\Users\L\OneDrive\1. دوري\[Subject]\(تم التسليم)\*.docx
-    search_pattern_1 = os.path.join(ONEDRIVE_BASE, "**", "(تم التسليم)", "*.docx")
-    search_pattern_2 = os.path.join(ONEDRIVE_BASE, "**", "تم التسليم", "*.docx")
+def main(
+    argv: list[str] | None = None,
+    *,
+    workspace: WorkspaceConfig | None = None,
+    catalog: RuleCatalog | None = None,
+) -> int:
+    active_workspace = (
+        workspace if workspace is not None else WorkspaceConfig.resolve()
+    )
+    active_catalog = (
+        catalog if catalog is not None else RuleCatalog.load(workspace=active_workspace)
+    )
+    training_data_dir = active_workspace.training_data_dir
+    onedrive_base = active_workspace.onedrive_base
+
+    if not training_data_dir.exists():
+        training_data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Looking for <onedrive_base>/[Subject]/(تم التسليم)/*.docx
+    search_pattern_1 = os.path.join(str(onedrive_base), "**", "(تم التسليم)", "*.docx")
+    search_pattern_2 = os.path.join(str(onedrive_base), "**", "تم التسليم", "*.docx")
     docx_files = glob.glob(search_pattern_1, recursive=True) + glob.glob(search_pattern_2, recursive=True)
-    
+
     if not docx_files:
         print("No files found to process.")
-        return
+        return 0
 
     overall_result = CueResult(inserted=[], removed=[])
 
     for docx_path in docx_files:
         print(f"Processing {docx_path}...")
-        
+
         p = Path(docx_path)
         subject_folder = p.parent.parent.name
-        
+
         # Clean subject name: remove prefix numbers like "1. " or "2. "
         subject = re.sub(r'^\d+\.\s*', '', subject_folder)
         filename_stem = p.stem
-        
-        identity = LectureIdentity.from_filename(p.name, fallback_subject=subject)
+
+        identity = LectureIdentity.from_filename(
+            p.name,
+            fallback_subject=subject,
+            routing_map=active_catalog.routing_map,
+        )
 
         if identity.date:
             date_str = identity.date
@@ -103,28 +131,33 @@ def main():
             date_str = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
             md_filename = f"{date_str}_{subject}_{filename_stem}.md"
             identity.date = date_str
-        
-        md_filepath = TRAINING_DATA_DIR / md_filename
-        
+
+        md_filepath = training_data_dir / md_filename
+
         # Skip if already processed
         if md_filepath.exists():
             print(f"Skipping {docx_path} - already processed as {md_filename}")
             continue
-        
+
         # Extract text
         text = read_docx.extract_text(docx_path)
         if text.startswith("Error reading docx:"):
             print(f"Failed to read {docx_path}: {text}")
             continue
-            
+
         # Write to md file
         with open(md_filepath, 'w', encoding='utf-8') as f:
             f.write(text)
-            
+
         print(f"Saved extracted text to {md_filepath} (Original docx kept safe in OneDrive)")
 
         # --- Diff Loop: detect new student cue candidates ---
-        ai_baseline = _find_ai_baseline(identity=identity, subject=subject)
+        ai_baseline = _find_ai_baseline(
+            identity=identity,
+            subject=subject,
+            workspace=active_workspace,
+            catalog=active_catalog,
+        )
         if ai_baseline:
             ai_text = ai_baseline.read_text(encoding='utf-8')
             result = detect_new_student_cues(ai_text, text)
@@ -140,7 +173,8 @@ def main():
     # Print consolidated cue report
     if overall_result.inserted or overall_result.removed:
         print("\n" + format_cue_report(overall_result))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

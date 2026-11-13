@@ -14,17 +14,15 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from tafreegh.export_docx import create_docx
 from tafreegh.verify_docx import (
-    BASE_EXEMPT_NAMES,
-    BASE_KINSHIP_NOUNS,
-    BASE_KUNYA_PREFIXES,
-    BASE_TITLE_PREFIXES,
-    AttendeeAnonymizationRules,
     MatnAlignmentValidator,
     Severity,
     _verify_exported_matn_segment,
-    load_attendee_anonymization_rules,
-    load_dialect_replacements,
     verify_docx,
+)
+from tafreegh.workspace_catalog import (
+    AttendeeAnonymizationRules,
+    RuleCatalog,
+    WorkspaceConfig,
 )
 
 
@@ -318,7 +316,7 @@ class TestVerifyDocxPunctuationAndOrthography(unittest.TestCase):
 
 class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
     def test_loads_dialect_replacements_dynamically_from_dialect_rules_md(self):
-        rules = load_dialect_replacements()
+        rules = RuleCatalog.load().dialect_replacements
         targets = {target for _, target in rules}
         # Entries from dialect-rules.md table that were previously omitted in hardcoded list
         self.assertIn("معانا", targets)
@@ -348,7 +346,9 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             rules_file = Path(tmpdir) / "dialect-rules.md"
             rules_file.write_text(backtick_free_md, encoding="utf-8")
-            rules = load_dialect_replacements(rules_file)
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter("always")
+                rules = RuleCatalog.load(dialect_rules_path=rules_file).dialect_replacements
             targets = {target for _, target in rules}
             self.assertIn("كدا", targets)
             self.assertIn("مفيهوش", targets)
@@ -447,7 +447,7 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
             self.assertTrue(rep_ok.passed, f"Expected anonymized & non-attendee names to pass, got: {rep_ok.issues}")
 
     def test_loads_attendee_anonymization_ssot_dynamically_from_dialect_rules_md(self):
-        default_ssot = load_attendee_anonymization_rules()
+        default_ssot = RuleCatalog.load().attendee_rules
         self.assertEqual(default_ssot.exempt_names, frozenset({"زيد", "عمرو", "بكر", "هند", "جحا", "إبراهيم"}))
         self.assertTrue({"أبو", "أبا"}.issubset(default_ssot.kunya_prefixes))
         self.assertTrue({"الشيخ", "شيخ", "الدكتور", "دكتور"}.issubset(default_ssot.title_prefixes))
@@ -484,7 +484,7 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
             self.assertEqual(leak_paras, [4, 5])
 
     def test_flags_nam_tafaddal_vocatives_and_al_akh_kinship_while_passing_fulan_forms(self):
-        rules = load_attendee_anonymization_rules()
+        rules = RuleCatalog.load().attendee_rules
         self.assertTrue({"الأخ", "الأخت"}.issubset(rules.kinship_nouns))
 
         leaking_phrases = [
@@ -533,7 +533,7 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
             self.assertEqual(leak_paras, [3, 4, 5])
 
     def test_attendee_anonymization_rules_encapsulates_customizable_stopwords(self):
-        rules = load_attendee_anonymization_rules()
+        rules = RuleCatalog.load().attendee_rules
         self.assertTrue(hasattr(rules, "kinship_stopwords"))
         self.assertTrue(hasattr(rules, "vocative_stopwords"))
         self.assertIn("الصعيدي", rules.kinship_stopwords)
@@ -568,7 +568,7 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
         self.assertEqual(custom_rules.find_leaks("قول يا زميل"), [])
 
     def test_flags_bare_vocatives_and_classroom_illustrations_for_known_attendees(self):
-        rules = load_attendee_anonymization_rules()
+        rules = RuleCatalog.load().attendee_rules
         self.assertTrue({"معاذ", "طارق", "سارة"}.issubset(rules.known_attendee_names))
 
         # 1. Bare vocatives without conversational triggers must leak for known attendees
@@ -636,7 +636,7 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
         self.assertEqual(custom_known_rules.find_leaks("يا معاذ"), [])
 
     def test_companion_hadith_vocatives_and_patronymics_exempt_from_bare_vocative_leaks(self):
-        rules = load_attendee_anonymization_rules()
+        rules = RuleCatalog.load().attendee_rules
         self.assertIn("معاذ", rules.known_attendee_names)
 
         pass_cases = [
@@ -679,7 +679,7 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             rules_path = Path(tmpdir) / "custom_known.md"
             rules_path.write_text(custom_rules_md, encoding="utf-8")
-            rules = load_attendee_anonymization_rules(rules_path)
+            rules = RuleCatalog.load(dialect_rules_path=rules_path).attendee_rules
             self.assertEqual(rules.known_attendee_names, frozenset({"سلمان", "بلال"}))
             self.assertTrue(rules.find_leaks("يا سلمان"))
             self.assertTrue(rules.find_leaks("بلال بيعمل إيه"))
@@ -708,15 +708,18 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
     def test_load_attendee_anonymization_rules_warns_and_falls_back_on_missing_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             missing_path = Path(tmpdir) / "non_existent_rules.md"
+            baseline = AttendeeAnonymizationRules.baseline()
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
-                rules = load_attendee_anonymization_rules(missing_path)
+                rules = RuleCatalog.load(dialect_rules_path=missing_path).attendee_rules
                 self.assertTrue(any(issubclass(w.category, UserWarning) for w in caught))
                 self.assertTrue(any("not found" in str(w.message) for w in caught))
-                self.assertEqual(rules.kinship_nouns, BASE_KINSHIP_NOUNS)
-                self.assertEqual(rules.kunya_prefixes, BASE_KUNYA_PREFIXES)
-                self.assertEqual(rules.title_prefixes, BASE_TITLE_PREFIXES)
-                self.assertEqual(rules.exempt_names, BASE_EXEMPT_NAMES)
+                self.assertEqual(rules.kinship_nouns, baseline.kinship_nouns)
+                self.assertEqual(rules.kunya_prefixes, baseline.kunya_prefixes)
+                self.assertEqual(rules.title_prefixes, baseline.title_prefixes)
+                self.assertEqual(rules.exempt_names, baseline.exempt_names)
+                self.assertEqual(rules.kinship_stopwords, baseline.kinship_stopwords)
+                self.assertEqual(rules.vocative_stopwords, baseline.vocative_stopwords)
                 # Leak detection still catches leaks instead of being disabled
                 self.assertTrue(rules.find_leaks("أخوكم معاذ بيسأل"))
                 self.assertTrue(rules.find_leaks("نعم يا معاذ؟"))
@@ -725,18 +728,68 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             bad_rules_path = Path(tmpdir) / "renamed_dialect_rules.md"
             bad_rules_path.write_text("# Rules without expected attendee headers\n", encoding="utf-8")
+            baseline = AttendeeAnonymizationRules.baseline()
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
-                rules = load_attendee_anonymization_rules(bad_rules_path)
+                rules = RuleCatalog.load(dialect_rules_path=bad_rules_path).attendee_rules
                 self.assertTrue(any(issubclass(w.category, UserWarning) for w in caught))
                 self.assertTrue(any("empty rule set" in str(w.message) for w in caught))
-                self.assertEqual(rules.kinship_nouns, BASE_KINSHIP_NOUNS)
-                self.assertEqual(rules.kunya_prefixes, BASE_KUNYA_PREFIXES)
-                self.assertEqual(rules.title_prefixes, BASE_TITLE_PREFIXES)
-                self.assertEqual(rules.exempt_names, BASE_EXEMPT_NAMES)
+                self.assertEqual(rules.kinship_nouns, baseline.kinship_nouns)
+                self.assertEqual(rules.kunya_prefixes, baseline.kunya_prefixes)
+                self.assertEqual(rules.title_prefixes, baseline.title_prefixes)
+                self.assertEqual(rules.exempt_names, baseline.exempt_names)
                 # Leak detection still catches leaks
                 self.assertTrue(rules.find_leaks("أخوكم معاذ بيسأل"))
                 self.assertTrue(rules.find_leaks("نعم يا معاذ؟"))
+
+    def test_verify_docx_uses_injected_workspace_and_custom_catalog(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            context_path = root / "CONTEXT.md"
+            context_path.write_text(
+                "## 3. توجيه المتون (Routing Map)\n\n"
+                "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
+                "| --- | --- | --- |\n"
+                "| `(مخصص)` | **مادة مخصصة للاختبار** | متن مخصص |\n",
+                encoding="utf-8",
+            )
+            rules_path = root / "dialect-rules.md"
+            rules_path.write_text(
+                "## Attendee Anonymization (فلان)\n"
+                "- **Preserved Titles & Kunyas**: أخوكم فلان، أبو فلان، الشيخ فلان.\n"
+                "- **Preserved Non-Attendee Names**: (زيد).\n"
+                "- **Known Attendee Names**: (حذيفة).\n"
+                "## Colloquial Lexicon & Verbal Markers\n"
+                "- **عامية_اختبار**\n",
+                encoding="utf-8",
+            )
+            ws = WorkspaceConfig.resolve(
+                project_root=root,
+                context_path=context_path,
+                dialect_rules_path=rules_path,
+                env={},
+            )
+            custom_catalog = RuleCatalog.load(workspace=ws)
+            doc_md = """بسم الله الرحمن الرحيم
+المادة: مادة مخصصة للاختبار
+2026-11-01
+
+الحمد لله رب العالمين. يا حذيفة انتبه.
+
+الحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+            docx_path = root / "custom_verify.docx"
+            create_docx(doc_md, docx_path, workspace=ws, catalog=custom_catalog)
+
+            rep_ws = verify_docx(docx_path, workspace=ws)
+            self.assertNotIn("HEADER_SUBJECT_UNRECOGNIZED", [i.code for i in rep_ws.issues])
+            self.assertIn("ATTENDEE_NAME_UNANONYMIZED", [i.code for i in rep_ws.issues])
+
+            rep_cat = verify_docx(docx_path, catalog=custom_catalog)
+            self.assertEqual(
+                [i.code for i in rep_ws.issues],
+                [i.code for i in rep_cat.issues],
+            )
 
 
 class TestVerifyDocxCoverageAndFallbackMatn(unittest.TestCase):
