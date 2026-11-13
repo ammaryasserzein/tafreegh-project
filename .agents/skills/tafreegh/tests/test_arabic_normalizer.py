@@ -82,3 +82,24 @@ def test_build_search_index_aligns_positions_and_extracts_vowelized_spans():
         indexed.extract_span(3, 3)
     with pytest.raises(ValueError):
         indexed.extract_span(0, len(indexed.normalized) + 1)
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        "",
+        "   \t\n  ",
+        "... ، ؟ ! « » —",
+        "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ ... الحَدُّ وَالمَوْضُوعُ ثُمَّ الثَّمَرَهْ!",
+        "سُورَةُ الضُّحَىٰ — ٱلْحَمْدُ لِلَّـهِ (1): فَقِهْ_الْبُيُوعِ!",
+        "  أَبُو\u200f إِبْرَاهِيمَ  \t آل\n عِمْرَانَ  ",
+    ],
+)
+def test_build_search_index_matches_normalize_arabic_search_parity(sample: str):
+    assert build_search_index(sample).normalized == normalize_arabic_search(sample)
+
+
+def test_strip_tashkeel_preserving_citations_handles_tatweel_empty_and_unmatched_parens():
+    assert strip_tashkeel_preserving_citations("مَـتْـنٌ () وَمَا (لَـم) يَـنْـتَـهِ (بِـلَا") == (
+        "متن () وما (لَـم) ينته (بلا"
+    )

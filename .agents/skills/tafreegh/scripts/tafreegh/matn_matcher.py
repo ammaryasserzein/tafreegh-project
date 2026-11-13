@@ -62,10 +62,6 @@ class SequentialMatnMatcher:
         self.pos_map = self._search_index.pos_map
         self._collapsed_source = re.sub(r"\s+", " ", self.source).strip()
 
-    def _extract_original_slice(self, norm_start: int, norm_end: int) -> tuple[int, int, str]:
-        """Calculates exact coordinates and extracts original slice preserving tashkeel and punctuation."""
-        return self._search_index.extract_span(norm_start, norm_end)
-
     def _record_anchored_match(
         self,
         norm_start: int,
@@ -77,7 +73,7 @@ class SequentialMatnMatcher:
         prefix: str = "",
     ) -> MatnMatchResult:
         """Extracts canonical slice, advances cursor when forward, records history, and returns result."""
-        orig_start, orig_end, canon_slice = self._extract_original_slice(norm_start, norm_end)
+        orig_start, orig_end, canon_slice = self._search_index.extract_span(norm_start, norm_end)
         self._active_norm_pos = norm_end
         if not is_re_read:
             self.cursor_norm = norm_end
