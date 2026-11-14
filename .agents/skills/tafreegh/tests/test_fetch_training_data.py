@@ -187,7 +187,15 @@ class TestDiffLoopAnalyzer(unittest.TestCase):
             f"**({canonical_clause})**\n\n"
             "شرح أول.\n\n"
             "سؤال عادي، نعم؟\n\n"
-            "سؤال بلاغي، ها؟\n",
+            "جملة زائدة، مش كدا؟\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "فصل آخر طويل في نفس الباب.\n\n"
+            "مسألة أصولية جديدة.\n\n"
+            "سؤال بلاغي، ها؟\n\n"
+            "### تقرير المتن الهجين (Hybrid Alignment Summary)\n\n"
+            "- مقاطع بوضع Fallback: 1\n\n"
+            "**تفصيل مقاطع Fallback:**\n\n"
+            "- سطر 6: **(ففي مسند احمد)**\n",
             encoding="utf-8",
         )
 
@@ -204,6 +212,9 @@ class TestDiffLoopAnalyzer(unittest.TestCase):
             f"**({canonical_clause})**\n\n"
             "سؤال عادي، نعم؟\n"
             "طالب: صوت غير مسموع.\n\n"
+            "جملة زائدة، مش كدا؟\n\n"
+            "فصل آخر طويل في نفس الباب.\n\n"
+            "مسألة أصولية جديدة.\n\n"
             "سؤال بلاغي، ها؟\n"
             "طالب: صوت غير مسموع.\n",
             reviewed_docx,
@@ -225,14 +236,21 @@ class TestDiffLoopAnalyzer(unittest.TestCase):
         self.assertIn(MatnDiffCategory.MATN_COPY_ERROR, categories)
         self.assertIn(MatnDiffCategory.ORAL_CITATION, categories)
         self.assertIn(MatnDiffCategory.ANCHOR_EXPIRY_REREAD, categories)
+        self.assertTrue(
+            all("تفصيل مقاطع Fallback" not in (d.ai_text or "") for d in analysis.matn_diffs),
+            "Hybrid summary footer must be stripped from AI baseline before Matn diffing",
+        )
 
-        # Genuine cue captured; rhetorical 'ها؟' suppressed
+        # Genuine inserted/removed cues captured; rhetorical 'ها؟' suppressed
         self.assertEqual(len(result.consolidated_cues.inserted), 1)
         self.assertIn("نعم؟", result.consolidated_cues.inserted[0]["cue_sentence"])
+        self.assertEqual(len(result.consolidated_cues.removed), 1)
+        self.assertIn("مش كدا؟", result.consolidated_cues.removed[0]["cue_sentence"])
 
         report = result.format_report()
         self.assertIn("تقرير تصنيف فروقات المتن", report)
         self.assertIn("مرشحات تنبيهات محادثة جديدة", report)
+        self.assertIn("تنبيهات محذوفة من قبل المستخدم", report)
         self.assertIn("تصحيحات Fallback", report)
         self.assertIn("أخطاء نسخ المتن الأصلي", report)
 
@@ -248,6 +266,68 @@ class TestDiffLoopAnalyzer(unittest.TestCase):
             rc = fetch_training_data.main(workspace=self.workspace)
         self.assertEqual(rc, 0)
         self.assertIn("Saved extracted text to", stdout_buf.getvalue())
+
+    def test_pairs_docx_matn_source_and_handles_corrupt_matn_source_gracefully(self):
+        subject_dir = self.workspace.onedrive_base / "1. الأسماء الحسنى" / "(تم التسليم)"
+        os.makedirs(subject_dir, exist_ok=True)
+        os.makedirs(self.workspace.ai_outputs_dir, exist_ok=True)
+        os.makedirs(self.workspace.matn_sources_dir, exist_ok=True)
+
+        # 1. Valid .docx canonical Matn source
+        canonical_clause = "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ"
+        docx_matn = self.workspace.matn_sources_dir / "2026-09-18_الأسماء_الحسنى.docx"
+        create_docx(canonical_clause, docx_matn, workspace=self.workspace)
+
+        ai_1 = self.workspace.ai_outputs_dir / "2026-09-18_الأسماء_الحسنى_AI.md"
+        ai_1.write_text("بسم الله الرحمن الرحيم\nالمادة: الأسماء الحسنى\n2026-09-18\n", encoding="utf-8")
+
+        rev_1 = subject_dir / "2026-09-18.docx"
+        create_docx(
+            f"بسم الله الرحمن الرحيم\nالمادة: الأسماء الحسنى\n2026-09-18\n\n**({canonical_clause})**\n",
+            rev_1,
+            workspace=self.workspace,
+        )
+
+        # 2. Corrupt .docx canonical Matn source on another lecture
+        corrupt_matn = self.workspace.matn_sources_dir / "2026-09-25_الأسماء_الحسنى.docx"
+        corrupt_matn.write_text("not a valid zip archive", encoding="utf-8")
+
+        ai_2 = self.workspace.ai_outputs_dir / "2026-09-25_الأسماء_الحسنى_AI.md"
+        ai_2.write_text("بسم الله الرحمن الرحيم\nالمادة: الأسماء الحسنى\n2026-09-25\n\nنعم؟\n", encoding="utf-8")
+
+        rev_2 = subject_dir / "2026-09-25.docx"
+        create_docx(
+            "بسم الله الرحمن الرحيم\nالمادة: الأسماء الحسنى\n2026-09-25\n\nنعم؟\nطالب: صوت غير مسموع.\n",
+            rev_2,
+            workspace=self.workspace,
+        )
+
+        analyzer = DiffLoopAnalyzer(workspace=self.workspace)
+        result = analyzer.run()
+
+        self.assertEqual(len(result.extracted_paths), 2)
+        first, second = result.analyses
+        self.assertIsNone(first.matn_source_error)
+        self.assertIn(MatnDiffCategory.MATN_COPY_ERROR, {d.category for d in first.matn_diffs})
+
+        self.assertEqual(second.matn_source_path, corrupt_matn)
+        self.assertIsNotNone(second.matn_source_error)
+        self.assertTrue((self.workspace.training_data_dir / "2026-09-25_الأسماء الحسنى.md").exists())
+        self.assertEqual(len(result.consolidated_cues.inserted), 1)
+        self.assertEqual(len(result.failed_paths), 1)
+        self.assertEqual(result.failed_paths[0][0], corrupt_matn)
+        self.assertIn("Warning: failed to read Matn source", result.format_report())
+
+    def test_missing_undated_unnumbered_docx_records_read_error(self):
+        subject_dir = self.workspace.onedrive_base / "1. رياض الصالحين" / "(تم التسليم)"
+        os.makedirs(subject_dir, exist_ok=True)
+        missing_docx = subject_dir / "notes.docx"
+
+        analyzer = DiffLoopAnalyzer(workspace=self.workspace)
+        analysis = analyzer.analyze_docx(missing_docx)
+
+        self.assertIsNotNone(analysis.read_error)
+        self.assertFalse(analysis.markdown_path.exists())
 
 
 if __name__ == "__main__":

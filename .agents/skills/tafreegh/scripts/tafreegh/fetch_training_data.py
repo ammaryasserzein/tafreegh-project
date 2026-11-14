@@ -9,11 +9,16 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .diff_cues import CueResult, detect_new_student_cues, format_cue_report
+from .diff_cues import CueCandidate, CueResult, detect_new_student_cues, format_cue_report
 from .diff_inline_matn import MatnDiffItem, classify_matn_diffs, format_matn_diff_report
 from .export_docx import find_matching_matn_source
 from .lecture_identity import LectureIdentity
-from .word_gateway import DocxArchiveError, extract_text, read_matn_source_content
+from .word_gateway import (
+    DocxArchiveError,
+    extract_text,
+    read_matn_source_content,
+    strip_hybrid_summary,
+)
 from .workspace_catalog import RuleCatalog, WorkspaceConfig, resolve_runtime_context
 
 _DELIVERED_FOLDER_NAMES = frozenset({"(تم التسليم)", "تم التسليم"})
@@ -31,6 +36,7 @@ class LectureDiffAnalysis:
     read_error: str | None = None
     ai_baseline_path: Path | None = None
     matn_source_path: Path | None = None
+    matn_source_error: str | None = None
     cues: CueResult = field(default_factory=CueResult)
     matn_diffs: tuple[MatnDiffItem, ...] = ()
 
@@ -83,7 +89,11 @@ def _format_analysis_lines(analysis: LectureDiffAnalysis) -> list[str]:
         )
         return lines
 
-    if analysis.matn_source_path is not None:
+    if analysis.matn_source_path is not None and analysis.matn_source_error is not None:
+        lines.append(
+            f"  ↳ Warning: failed to read Matn source {analysis.matn_source_path.name}: {analysis.matn_source_error}"
+        )
+    elif analysis.matn_source_path is not None:
         lines.append(f"  ↳ Paired canonical Matn source: {analysis.matn_source_path.name}")
     if analysis.cues.inserted:
         lines.append(
@@ -189,10 +199,14 @@ class DiffLoopAnalyzer:
         elif identity.lecture_number:
             md_filename = f"{identity.resolved_stem}.md"
         else:
-            mtime = os.path.getmtime(docx_path)
-            date_str = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
-            md_filename = f"{date_str}_{subject}_{docx_path.stem}.md"
-            identity = identity.merge(LectureIdentity(date=date_str))
+            try:
+                mtime = os.path.getmtime(docx_path)
+            except OSError:
+                md_filename = f"{subject}_{docx_path.stem}.md"
+            else:
+                date_str = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+                md_filename = f"{date_str}_{subject}_{docx_path.stem}.md"
+                identity = identity.merge(LectureIdentity(date=date_str))
 
         return identity, subject, self.workspace.training_data_dir / md_filename
 
@@ -230,10 +244,17 @@ class DiffLoopAnalyzer:
                 identity=identity,
             )
 
-        ai_text = ai_baseline.read_text(encoding="utf-8")
+        ai_text = strip_hybrid_summary(ai_baseline.read_text(encoding="utf-8"))
         cues = detect_new_student_cues(ai_text, text)
         matn_source_path = self.find_matn_source(identity)
-        matn_source_text = read_matn_source_content(matn_source_path) if matn_source_path else None
+        matn_source_text: str | None = None
+        matn_source_error: str | None = None
+        if matn_source_path is not None:
+            try:
+                matn_source_text = read_matn_source_content(matn_source_path)
+            except DocxArchiveError as exc:
+                matn_source_error = str(exc)
+
         matn_diffs = tuple(classify_matn_diffs(ai_text, text, matn_source=matn_source_text))
 
         return LectureDiffAnalysis(
@@ -242,6 +263,7 @@ class DiffLoopAnalyzer:
             identity=identity,
             ai_baseline_path=ai_baseline,
             matn_source_path=matn_source_path,
+            matn_source_error=matn_source_error,
             cues=cues,
             matn_diffs=matn_diffs,
         )
@@ -257,8 +279,8 @@ class DiffLoopAnalyzer:
         skipped: list[Path] = []
         failed: list[tuple[Path, str]] = []
         analyses: list[LectureDiffAnalysis] = []
-        all_inserted = []
-        all_removed = []
+        all_inserted: list[CueCandidate] = []
+        all_removed: list[CueCandidate] = []
         all_matn_diffs: list[MatnDiffItem] = []
 
         for docx_path in deliverables:
@@ -270,6 +292,9 @@ class DiffLoopAnalyzer:
             if analysis.read_error is not None:
                 failed.append((docx_path, analysis.read_error))
                 continue
+
+            if analysis.matn_source_path is not None and analysis.matn_source_error is not None:
+                failed.append((analysis.matn_source_path, analysis.matn_source_error))
 
             extracted.append(analysis.markdown_path)
             all_inserted.extend(analysis.cues.inserted)

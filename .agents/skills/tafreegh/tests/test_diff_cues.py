@@ -2,7 +2,7 @@
 
 import pytest
 
-from tafreegh.diff_cues import CueResult, detect_new_student_cues
+from tafreegh.diff_cues import CueResult, detect_new_student_cues, format_cue_report
 
 
 class TestDetectNewStudentCues:
@@ -129,3 +129,30 @@ class TestDetectNewStudentCues:
         )
         result = detect_new_student_cues(ai_text, corrected_text)
         assert result.inserted == []
+
+    def test_detects_removed_cues_and_formats_both_sections(self):
+        ai_text = (
+            "نقطة أولى، مش كدا؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "شرح مستمر في المسألة.\n\n"
+            "تفصيل ثانٍ واضح.\n\n"
+            "نقطة ثانية، نعم؟\n\n"
+            "نقطة ثالثة."
+        )
+        corrected_text = (
+            "نقطة أولى، مش كدا؟\n\n"
+            "شرح مستمر في المسألة.\n\n"
+            "تفصيل ثانٍ واضح.\n\n"
+            "نقطة ثانية، نعم؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "نقطة ثالثة."
+        )
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert len(result.inserted) == 1
+        assert len(result.removed) == 1
+        assert "نعم؟" in result.inserted[0]["cue_sentence"]
+        assert "مش كدا؟" in result.removed[0]["cue_sentence"]
+
+        report = format_cue_report(result)
+        assert "مرشحات تنبيهات محادثة جديدة" in report
+        assert "تنبيهات محذوفة من قبل المستخدم" in report

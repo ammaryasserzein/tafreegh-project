@@ -8,18 +8,14 @@ Implements ADR 0002 & Handoff Task 4:
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-# Ensure UTF-8 output
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8')
-
 from .arabic_normalizer import normalize_arabic_search
+from .word_gateway import DocxArchiveError, read_matn_source_content
 
 
 class MatnDiffCategory(str, Enum):
@@ -252,6 +248,7 @@ def _render_category_section(
     *,
     include_ai_text: bool,
 ) -> list[str]:
+    """Render one categorized section of MatnDiffItem entries."""
     lines = [f"\n#### {section_num}. {title} ({len(items)}):"]
     for idx, item in enumerate(items, 1):
         lines.append(f"  {idx}. سطر {item.line_number}: \"{item.user_text}\"")
@@ -288,6 +285,9 @@ def format_matn_diff_report(diffs: list[MatnDiffItem]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint for inline matn diff reporting."""
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     args = sys.argv[1:] if argv is None else argv
     if len(args) < 2:
         print("Usage: py diff_inline_matn.py <ai_file> <user_file> [matn_source_file]")
@@ -303,7 +303,13 @@ def main(argv: list[str] | None = None) -> int:
 
     ai_c = ai_p.read_text(encoding='utf-8')
     user_c = user_p.read_text(encoding='utf-8')
-    matn_c = matn_p.read_text(encoding='utf-8') if matn_p and matn_p.exists() else None
+    matn_c: str | None = None
+    if matn_p and matn_p.exists():
+        try:
+            matn_c = read_matn_source_content(matn_p)
+        except DocxArchiveError as exc:
+            print(f"Error: Failed to read matn source {matn_p}: {exc}")
+            return 1
 
     diff_list = classify_matn_diffs(ai_c, user_c, matn_source=matn_c)
     print(format_matn_diff_report(diff_list))

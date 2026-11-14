@@ -8,6 +8,7 @@ and proposes it as a candidate cue for the Known Cue List in SKILL.md.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import TypedDict
 
@@ -63,9 +64,6 @@ def _find_preceding_sentence(lines: list[str], target_index: int) -> str:
         if line and not line.startswith("طالب:"):
             return line
     return ""
-
-
-from dataclasses import dataclass, field
 
 
 @dataclass
@@ -128,6 +126,7 @@ def detect_new_student_cues(
     return CueResult(inserted=inserted_candidates, removed=removed_candidates)
 
 def _format_section(title: str, cues: list[CueCandidate], file_label: str, hint: str) -> list[str]:
+    """Render one labeled section of inserted or removed cue candidates."""
     lines = [title, "=" * 60]
     for i, c in enumerate(cues, 1):
         lines.append(f"  {i}. عبارة الشيخ السابقة: \"{c['cue_sentence']}\"")
@@ -163,8 +162,12 @@ def format_cue_report(result: CueResult) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for student cue candidate detection."""
     import sys
     from pathlib import Path
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
 
     args = sys.argv[1:] if argv is None else argv
     if len(args) < 2:
