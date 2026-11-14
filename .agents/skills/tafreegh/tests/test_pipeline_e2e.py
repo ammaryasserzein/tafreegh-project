@@ -1,7 +1,6 @@
 import sys
 import unittest
 import tempfile
-import shutil
 from pathlib import Path
 import docx
 from docx.oxml.ns import qn
@@ -11,11 +10,14 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 from tafreegh.export_docx import (
-    export_documents,
-    find_matching_matn_source,
+    PublicationOrchestrator,
     interleave_matn_segments,
     verify_isolated_segment,
 )
+from tafreegh.lecture_identity import LectureIdentity
+from tafreegh.matn_matcher import SequentialMatnMatcher
+from tafreegh.verify_docx import verify_docx
+from tafreegh.workspace_catalog import RuleCatalog, WorkspaceConfig
 
 
 class TestPipelineE2E(unittest.TestCase):
@@ -37,10 +39,17 @@ class TestPipelineE2E(unittest.TestCase):
         self.riyadh_folder = self.onedrive_root / "1. رياض الصالحين"
         self.riyadh_folder.mkdir(parents=True, exist_ok=True)
 
+        self.workspace = WorkspaceConfig.resolve(
+            project_root=self.project_root,
+            onedrive_base=self.onedrive_root,
+            env={},
+        )
+        self.catalog = RuleCatalog.load()
+
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_pipeline_e2e_hybrid_matn_and_atomic_archiving(self):
+    def test_pipeline_e2e_dynamic_fallback_interleaving_and_atomic_archiving(self):
         date = "2026-09-24"
         keyword = "رياض"
 
@@ -53,10 +62,7 @@ class TestPipelineE2E(unittest.TestCase):
         matn_file = self.matn_dir / f"{date}__{keyword}.md"
         matn_file.write_text(matn_content, encoding="utf-8")
 
-        # 2. Raw transcript with 3 candidate matn segments:
-        # - Segment 1: Primary match
-        # - Segment 2: Fallback (missing from source, sandwiched between 1 and 3)
-        # - Segment 3: Primary match
+        # 2. Raw transcript with primary, sandwiched classical fallback, and isolated colloquial fallback
         transcript_markdown = f"""بسم الله الرحمن الرحيم
 المادة: رياض الصالحين
 {date}
@@ -73,7 +79,11 @@ class TestPipelineE2E(unittest.TestCase):
 
 **(فرفع يديه وقال اللهم امتي امتي وبكى)**
 
+**(ده كلام عامي خارج المتن مش كدا؟)**
+
 اللهم ارحم هذه الأمة المباركة.
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
 """
         raw_file = self.raw_dir / f"{date}__{keyword}.md"
         raw_file.write_text(transcript_markdown, encoding="utf-8")
@@ -83,14 +93,12 @@ class TestPipelineE2E(unittest.TestCase):
         chunk_dir.mkdir(parents=True, exist_ok=True)
         (chunk_dir / "chunk_01.txt").write_text("dummy chunk content", encoding="utf-8")
 
-        # 3. Execute export_documents
-        result = export_documents(
+        # 3. Execute PublicationOrchestrator
+        orchestrator = PublicationOrchestrator(workspace=self.workspace, catalog=self.catalog)
+        result = orchestrator.publish(
             markdown_text=transcript_markdown,
             original_md_path=raw_file,
-            keyword=keyword,
-            date=date,
-            base_onedrive=self.onedrive_root,
-            project_root=self.project_root,
+            identity=LectureIdentity(date=date, keyword=keyword),
         )
 
         onedrive_file = result["onedrive_file"]
@@ -102,7 +110,6 @@ class TestPipelineE2E(unittest.TestCase):
         self.assertEqual(onedrive_file.parent, self.riyadh_folder)
 
         doc = docx.Document(str(onedrive_file))
-        # Check RTL on paragraphs
         has_rtl = False
         has_bold_cs = False
         full_docx_text = []
@@ -124,27 +131,27 @@ class TestPipelineE2E(unittest.TestCase):
         self.assertTrue(has_bold_cs, "Matn runs must have w:bCs bold property")
         doc_text_joined = "\n".join(full_docx_text)
         self.assertNotIn("<!-- fallback -->", doc_text_joined, "Word document must NOT contain fallback comment tags")
+        self.assertIn("(ده كلام عامي خارج المتن مش كدا؟)", doc_text_joined)
 
         # --- ASSERTION 2: AI Baseline Markdown & Fallback Summary ---
         self.assertTrue(project_file.exists(), "03_AI_Outputs markdown must exist")
         ai_md = project_file.read_text(encoding="utf-8")
 
-        # Primary matches must have vowelized canonical text
         self.assertIn("عَنْ عَبْدِ اللَّهِ بْنِ عَمْرِو بْنِ الْعَاصِ رَضِيَ اللَّهُ عَنْهُمَا", ai_md)
         self.assertIn("فَرَفَعَ يَدَيْهِ وَقَالَ: «اللَّهُمَّ أُمَّتِي أُمَّتِي»، وَبَكَى", ai_md)
+        # Sandwiched classical fallback stays bolded with <!-- fallback -->
+        self.assertIn("<!-- fallback -->\n**(ان تعذبهم فانهم عبادك وان تغفر لهم فانك انت العزيز الحكيم)**", ai_md)
+        # Isolated colloquial fallback is unbolded without <!-- fallback -->
+        self.assertIn("(ده كلام عامي خارج المتن مش كدا؟)", ai_md)
+        self.assertNotIn("**(ده كلام عامي خارج المتن مش كدا؟)**", ai_md)
 
-        # Fallback segment must be tagged with <!-- fallback --> and unvowelized bold matn
-        self.assertIn("<!-- fallback -->", ai_md)
-        self.assertIn("**(ان تعذبهم فانهم عبادك وان تغفر لهم فانك انت العزيز الحكيم)**", ai_md)
-
-        # Summary report must be appended
         self.assertIn("### تقرير المتن الهجين (Dynamic Fallback Interleaving Summary)", ai_md)
-        self.assertIn("إجمالي مقاطع المتن: 3", ai_md)
+        self.assertIn("إجمالي مقاطع المتن: 4", ai_md)
         self.assertIn("مطابقة أصلية (Primary Mode): 2", ai_md)
-        self.assertIn("مقاطع Fallback (بدون تشكيل): 1", ai_md)
+        self.assertIn("مقاطع Fallback (بدون تشكيل): 2", ai_md)
         self.assertIn("محصور بين متنين (مخفف الشك)", ai_md)
 
-        # --- ASSERTION 3: Atomic Archiving ---
+        # --- ASSERTION 3: Atomic Archiving & Chunk Deletion ---
         self.assertIsNotNone(archived)
         matn_processed = self.matn_dir / "processed" / f"{date}__{keyword}.md"
         raw_processed = self.raw_dir / "processed" / f"{date}__{keyword}.md"
@@ -153,17 +160,43 @@ class TestPipelineE2E(unittest.TestCase):
         self.assertTrue(matn_processed.exists(), "Matn source must be in processed/")
         self.assertFalse(raw_file.exists(), "Original raw transcript must be moved out of root")
         self.assertTrue(raw_processed.exists(), "Raw transcript must be in processed/")
-
-        # --- ASSERTION 4: Deletion of Reproducible Chunks ---
         self.assertFalse(chunk_dir.exists(), "Chunk directories (_مقاطع) must be deleted")
 
-    def test_conservative_doubt_filters_isolated_dialect_commentary(self):
-        # Sandwiched segment passes relaxed doubt even without cues
-        self.assertTrue(verify_isolated_segment("ان تعذبهم فانهم عبادك"))
+        # --- ASSERTION 4: Verification Gate & Overwrite Re-Export ---
+        qa_report = verify_docx(
+            onedrive_file,
+            matn_path=matn_processed,
+            raw_path=raw_processed,
+            catalog=self.catalog,
+        )
+        self.assertEqual(qa_report.error_count, 0, msg=qa_report.issues)
 
-        # Isolated segment with Egyptian colloquial dialect is rejected by strict doubt
-        self.assertFalse(verify_isolated_segment("ده الكلام على المستحب مش كدا؟"))
-        self.assertFalse(verify_isolated_segment("بقى كده مفيش مشكلة خالص"))
+        reexport = orchestrator.publish(
+            markdown_text=transcript_markdown,
+            matn_source_path=matn_processed,
+            identity=LectureIdentity(date=date, keyword=keyword),
+            overwrite=True,
+            archive=False,
+        )
+        self.assertEqual(reexport["onedrive_file"], onedrive_file)
+        self.assertIsNone(reexport["archived"])
+
+    def test_conservative_doubt_filters_isolated_dialect_commentary(self):
+        # Shared catalog passed directly avoids repeated disk reads and preserves vowelized detection
+        self.assertTrue(verify_isolated_segment("ان تعذبهم فانهم عبادك", catalog=self.catalog))
+        self.assertFalse(verify_isolated_segment("ده الكلام على المستحب مش كدا؟", catalog=self.catalog))
+        self.assertFalse(verify_isolated_segment("ده الكلام مِشْ كِدَا؟", catalog=self.catalog))
+
+        # End-to-end check via interleave_matn_segments + PublicationOrchestrator
+        matcher = SequentialMatnMatcher("أَوَّلُ الْمَتْنِ الكَرِيمِ ... آخِرُ الْمَتْنِ الكَرِيمِ")
+        interleaved = interleave_matn_segments(
+            "**(اول المتن الكريم)**\n\n**(سقط من المطبوعة)**\n\n**(اخر المتن الكريم)**\n\n**(هذا مِشْ كِدَا يا شيخ)**",
+            matcher,
+            catalog=self.catalog,
+        )
+        self.assertIn("<!-- fallback -->\n**(سقط من المطبوعة)**", interleaved)
+        self.assertIn("(هذا مش كدا يا شيخ)", interleaved)
+        self.assertNotIn("**(هذا مش كدا يا شيخ)**", interleaved)
 
 
 if __name__ == "__main__":

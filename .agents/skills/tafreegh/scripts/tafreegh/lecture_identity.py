@@ -21,6 +21,12 @@ NOTEBOOKLM_HEADER_PATTERNS: tuple[re.Pattern[str], ...] = (
 _FULL_DATE_LINE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 _FULL_LECTURE_LABEL_LINE_RE = re.compile(r'^(?:المحاضرة|محاضرة|الدرس|درس)\s*:\s*\d+$')
 _FULL_NUMBERED_STEM_LINE_RE = re.compile(r'^\d+[-_][^\s\n\r]+?[-_]\d+$')
+_UNSAFE_FILENAME_CHARS_RE = re.compile(r'[\\/*?:"<>|()]')
+
+
+def sanitize_filename_token(value: str) -> str:
+    """Sanitize a subject or title string into a filesystem-safe underscore token."""
+    return _UNSAFE_FILENAME_CHARS_RE.sub("", value).strip().replace(" ", "_")
 
 
 def is_header_line(line: str) -> bool:
@@ -112,7 +118,7 @@ class LectureIdentity:
             return normalize_stem(self.stem)
         if self.lecture_number:
             subj = self.subject_name or self.keyword or "مادة"
-            subj_token = re.sub(r'[\\/*?:"<>|()]', '', subj).strip().replace(" ", "_")
+            subj_token = sanitize_filename_token(subj)
             return f"{self.lecture_number}-{subj_token}_{self.lecture_number}"
         if self.date:
             return str(self.date)
@@ -386,12 +392,20 @@ def resolve_document_identity(
             continue
         prev = resolved
         resolved = prev.merge(layer)
+        if layer.keyword and not layer.subject_name and routing_map:
+            canonical_key, canonical_subj = match_canonical_subject(layer.keyword, routing_map)
+            if canonical_subj:
+                resolved = replace(
+                    resolved,
+                    keyword=canonical_key or resolved.keyword,
+                    subject_name=canonical_subj,
+                )
         if layer.lecture_number and not layer.date:
             resolved = replace(resolved, date=None)
         if not layer.stem and (
             (layer.lecture_number and layer.lecture_number != prev.lecture_number)
             or (layer.date and layer.date != prev.date)
-            or (layer.subject_name and layer.subject_name != prev.subject_name)
+            or (resolved.subject_name and resolved.subject_name != prev.subject_name)
         ):
             resolved = replace(resolved, stem=None)
     return resolved

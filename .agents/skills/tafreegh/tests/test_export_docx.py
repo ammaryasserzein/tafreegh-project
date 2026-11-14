@@ -16,8 +16,10 @@ from tafreegh.export_docx import (
     archive_processed_inputs,
     export_documents,
     interleave_matn_segments,
+    main as export_main,
+    verify_isolated_segment,
 )
-from tafreegh.word_gateway import create_docx
+from tafreegh.word_gateway import DocxArchiveError, create_docx, extract_text, inspect_docx
 from tafreegh.lecture_identity import (
     NOTEBOOKLM_HEADER_PATTERNS,
     LectureIdentity,
@@ -808,6 +810,32 @@ Source guide
 
 
 class TestPublicationOrchestratorAndInterleaving(unittest.TestCase):
+    def _build_temp_workspace(
+        self,
+        tmp_dir: str,
+        *,
+        folder_name: str = "1. رياض الصالحين",
+        dialect_rules_text: str | None = None,
+    ) -> tuple[Path, Path, Path, Path, WorkspaceConfig]:
+        root = Path(tmp_dir) / "repo"
+        onedrive = Path(tmp_dir) / "onedrive"
+        matn_dir = root / "01_Matn_Sources"
+        raw_dir = root / "02_Raw_Inputs"
+        matn_dir.mkdir(parents=True)
+        raw_dir.mkdir(parents=True)
+        (onedrive / folder_name).mkdir(parents=True)
+        dialect_path: Path | None = None
+        if dialect_rules_text is not None:
+            dialect_path = root / "dialect-rules.md"
+            dialect_path.write_text(dialect_rules_text, encoding="utf-8")
+        ws = WorkspaceConfig.resolve(
+            project_root=root,
+            onedrive_base=onedrive,
+            dialect_rules_path=dialect_path,
+            env={},
+        )
+        return root, onedrive, matn_dir, raw_dir, ws
+
     def test_interleave_matn_segments_handles_primary_sandwiched_and_isolated_dialect(self):
         matn_source = (
             "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ ... "
@@ -836,33 +864,46 @@ class TestPublicationOrchestratorAndInterleaving(unittest.TestCase):
         self.assertIn("(ده كلام عامي جوه السطر مش كدا؟)", interleaved)
         self.assertNotIn("**(ده كلام عامي جوه السطر مش كدا؟)**", interleaved)
 
+    def test_verify_isolated_segment_strips_tashkeel_and_preserves_source_anchored_compound(self):
+        catalog = RuleCatalog.load()
+        self.assertFalse(verify_isolated_segment("دَهْ كَلَام مِشْ كِدَا", catalog=catalog))
+
+        # Compound Sharh-Matn anchored in source remains bolded even with colloquial Sharh prefix
+        matn_source = "بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ"
+        matcher = SequentialMatnMatcher(matn_source)
+        interleaved = interleave_matn_segments(
+            "**الشرح ده في قوله: بسم الله الرحمن الرحيم**",
+            matcher,
+            catalog=catalog,
+        )
+        self.assertIn("**(الشرح ده في قوله: بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ)**", interleaved)
+
     def test_orchestrator_separates_prepare_emit_and_explicit_archive_phases(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir) / "repo"
-            onedrive = Path(tmpdir) / "onedrive"
-            matn_dir = root / "01_Matn_Sources"
-            raw_dir = root / "02_Raw_Inputs"
-            matn_dir.mkdir(parents=True)
-            raw_dir.mkdir(parents=True)
-            (onedrive / "1. رياض الصالحين").mkdir(parents=True)
+            _, _, matn_dir, raw_dir, ws = self._build_temp_workspace(tmpdir)
 
             matn_file = matn_dir / "2026-10-22__رياض.md"
             matn_file.write_text("بَابُ الْإِخْلَاصِ", encoding="utf-8")
             raw_file = raw_dir / "2026-10-22__رياض.md"
             raw_text = (
                 "2026-10-22 رياض.mp3\nSource guide\n\n"
-                "**(باب الإخلاص)**\n\n"
-                "المبلغ 5000 جنيه، والحمد لله."
+                "**`(باب الإخلاص)`**\n\n"
+                "**(سقط من المطبوعة)**\n\n"
+                "المبلغ 5000 جنيه ولفظ `مقحم`، والحمد لله."
             )
             raw_file.write_text(raw_text, encoding="utf-8")
             chunk_dir = raw_dir / "2026-10-22__رياض.md_مقاطع"
             chunk_dir.mkdir()
             (chunk_dir / "part1.txt").write_text("chunk", encoding="utf-8")
 
-            ws = WorkspaceConfig.resolve(project_root=root, onedrive_base=onedrive, env={})
             orchestrator = PublicationOrchestrator(workspace=ws)
 
             prepared = orchestrator.prepare_transcript(raw_text, original_md_path=raw_file)
+            self.assertNotIn("Source guide", prepared.clean_markdown)
+            self.assertNotIn("`", prepared.clean_markdown)
+            self.assertTrue(
+                prepared.clean_markdown.startswith("بسم الله الرحمن الرحيم\nالمادة: رياض الصالحين\n2026-10-22")
+            )
             self.assertIn("بَابُ الْإِخْلَاصِ", prepared.clean_markdown)
             self.assertIn("5 آلاف", prepared.clean_markdown)
             self.assertTrue(matn_file.exists())
@@ -871,14 +912,28 @@ class TestPublicationOrchestratorAndInterleaving(unittest.TestCase):
             rendered = orchestrator.emit_deliverables(prepared)
             self.assertTrue(rendered.onedrive_file.exists())
             self.assertTrue(rendered.project_file.exists())
+            ai_text = rendered.project_file.read_text(encoding="utf-8")
+            self.assertIn("<!-- fallback -->", ai_text)
+            self.assertIn("### تقرير المتن الهجين (Dynamic Fallback Interleaving Summary)", ai_text)
+            self.assertNotIn("`", ai_text)
+
+            docx_text = extract_text(rendered.onedrive_file)
+            self.assertNotIn("<!-- fallback -->", docx_text)
+            self.assertNotIn("### تقرير المتن الهجين", docx_text)
+            inspected = inspect_docx(rendered.onedrive_file)
+            self.assertEqual(inspected.paragraphs[0].text, "بسم الله الرحمن الرحيم")
+            self.assertEqual(inspected.paragraphs[1].text, "المادة: رياض الصالحين")
+
             # Emission alone must NOT move or delete input files
             self.assertTrue(matn_file.exists())
             self.assertTrue(raw_file.exists())
             self.assertTrue(chunk_dir.exists())
 
-            # Collision-safe #AI naming without overwrite vs in-place with overwrite=True
+            # Collision-safe #AI and #AI (1) naming vs in-place overwrite
             second = orchestrator.emit_deliverables(prepared, overwrite=False)
             self.assertEqual(second.onedrive_file.name, "2026-10-22 #AI.docx")
+            third = orchestrator.emit_deliverables(prepared, overwrite=False)
+            self.assertEqual(third.onedrive_file.name, "2026-10-22 #AI (1).docx")
             replaced = orchestrator.emit_deliverables(prepared, overwrite=True)
             self.assertEqual(replaced.onedrive_file.name, "2026-10-22.docx")
 
@@ -892,22 +947,87 @@ class TestPublicationOrchestratorAndInterleaving(unittest.TestCase):
             self.assertTrue((matn_dir / "processed" / "2026-10-22__رياض.md").exists())
             self.assertTrue((raw_dir / "processed" / "2026-10-22__رياض.md").exists())
 
-    def test_orchestrator_publish_supports_deferred_archiving_flag(self):
+    def test_orchestrator_publish_supports_deferred_archiving_explicit_inputs_and_error_safety(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir) / "repo"
-            onedrive = Path(tmpdir) / "onedrive"
-            raw_dir = root / "02_Raw_Inputs"
-            raw_dir.mkdir(parents=True)
-            (onedrive / "المنطق").mkdir(parents=True)
+            root, onedrive, matn_dir, raw_dir, ws = self._build_temp_workspace(
+                tmpdir,
+                folder_name="المنطق",
+            )
             raw_file = raw_dir / "2026-10-17__منطق.md"
             raw_text = "بسم الله الرحمن الرحيم\nالمادة: المنطق (السلم المنورق)\n2026-10-17\n\nالحمد لله."
             raw_file.write_text(raw_text, encoding="utf-8")
 
-            ws = WorkspaceConfig.resolve(project_root=root, onedrive_base=onedrive, env={})
+            custom_matn = Path(tmpdir) / "external_matn.md"
+            custom_matn.write_text("إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ", encoding="utf-8")
+
             orchestrator = PublicationOrchestrator(workspace=ws)
-            res = orchestrator.publish(raw_text, original_md_path=raw_file, archive=False)
+            res = orchestrator.publish(
+                "2026-10-17 منطق.mp3\n\n**(ان مبادئ كل علم عشره)**",
+                original_md_path=raw_file,
+                matn_source_path=custom_matn,
+                identity=LectureIdentity(date="2026-10-18", keyword="منطق"),
+                archive=False,
+            )
             self.assertIsNone(res["archived"])
             self.assertTrue(raw_file.exists())
+            self.assertEqual(res["onedrive_file"].name, "2026-10-18.docx")
+            self.assertIn("إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ", res["project_file"].read_text(encoding="utf-8"))
+
+            # Corrupt template aborts before archiving inputs
+            corrupt_template = root / "corrupt_template.docx"
+            corrupt_template.write_text("not a zip", encoding="utf-8")
+            broken_ws = WorkspaceConfig.resolve(
+                project_root=root,
+                onedrive_base=onedrive,
+                word_base_template=corrupt_template,
+                env={},
+            )
+            broken_orchestrator = PublicationOrchestrator(workspace=broken_ws)
+            with self.assertRaises(DocxArchiveError):
+                broken_orchestrator.publish(raw_text, original_md_path=raw_file, archive=True)
+            self.assertTrue(raw_file.exists())
+            self.assertFalse((matn_dir / "processed").exists())
+
+    def test_export_documents_and_cli_support_numeric_lecture_date_and_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root, onedrive, _, raw_dir, _ = self._build_temp_workspace(
+                tmpdir,
+                folder_name="2. فقه البيوع",
+            )
+            raw_file = raw_dir / "sample.md"
+            raw_file.write_text("الحمد لله رب العالمين.", encoding="utf-8")
+
+            res = export_documents(
+                "الحمد لله رب العالمين.",
+                original_md_path=raw_file,
+                keyword="بيوع",
+                date="17",
+                base_onedrive=onedrive,
+                project_root=root,
+            )
+            self.assertEqual(res["onedrive_file"].name, "17-فقه_البيوع_سعد_الخثلان_17.docx")
+            self.assertEqual(inspect_docx(res["onedrive_file"]).paragraphs[2].text, "المحاضرة: 17")
+
+            missing_rc = export_main([str(Path(tmpdir) / "does_not_exist.md")])
+            self.assertEqual(missing_rc, 1)
+
+            cli_md = Path(tmpdir) / "2026-10-25__بيوع.md"
+            cli_md.write_text("بسم الله الرحمن الرحيم\nالمادة: فقه البيوع (سعد الخثلان)\n2026-10-25\n\nالحمد لله.", encoding="utf-8")
+            ws_env = WorkspaceConfig.resolve(project_root=root, onedrive_base=onedrive, env={})
+            first_out = PublicationOrchestrator(workspace=ws_env).publish(
+                cli_md.read_text(encoding="utf-8"),
+                original_md_path=cli_md,
+                archive=False,
+            )
+            self.assertEqual(first_out["onedrive_file"].name, "2026-10-25.docx")
+            self.assertTrue(first_out["onedrive_file"].exists())
+            reexport_same = PublicationOrchestrator(workspace=ws_env).publish(
+                "بسم الله الرحمن الرحيم\nالمادة: فقه البيوع (سعد الخثلان)\n2026-10-25\n\nمعدل.",
+                overwrite=True,
+                archive=False,
+            )
+            self.assertEqual(reexport_same["onedrive_file"].name, "2026-10-25.docx")
+            self.assertIn("معدل", extract_text(reexport_same["onedrive_file"]))
 
 
 class TestLectureIdentity(unittest.TestCase):
@@ -1118,6 +1238,11 @@ class TestCanonicalRoutingSSOT(unittest.TestCase):
             onedrive = Path(tmp_dir) / "onedrive"
             root.mkdir()
             (onedrive / "العقيدة الواسطية").mkdir(parents=True)
+            (root / "01_Matn_Sources").mkdir(parents=True)
+            (root / "01_Matn_Sources" / "2026-11-01__واسطية.md").write_text(
+                "الْحَمْدُ لِلَّهِ الَّذِي أَرْسَلَ رَسُولَهُ",
+                encoding="utf-8",
+            )
             custom_context = root / "CONTEXT.md"
             custom_context.write_text(
                 "## 3. توجيه المتون (Routing Map)\n\n"
@@ -1142,12 +1267,16 @@ class TestCanonicalRoutingSSOT(unittest.TestCase):
                 env={},
             )
             res = export_documents(
-                "2026-11-01 واسطية.mp3\n\nالحمد لله رب العالمين.",
+                "2026-11-01 واسطية.mp3\n\nالحمد لله رب العالمين.\n\n**(كلام فيه عامية_مخصصة جدا)**",
                 workspace=ws,
             )
             self.assertEqual(res["onedrive_file"].parent, onedrive / "العقيدة الواسطية")
             doc = docx.Document(str(res["onedrive_file"]))
             self.assertEqual(doc.paragraphs[1].text.strip(), "المادة: العقيدة الواسطية")
+            ai_out = res["project_file"].read_text(encoding="utf-8")
+            self.assertIn("(كلام فيه عامية_مخصصة جدا)", ai_out)
+            self.assertNotIn("**(كلام فيه عامية_مخصصة جدا)**", ai_out)
+            self.assertNotIn("<!-- fallback -->", extract_text(res["onedrive_file"]))
 
 
 class TestLoadDialectMarkers(unittest.TestCase):
