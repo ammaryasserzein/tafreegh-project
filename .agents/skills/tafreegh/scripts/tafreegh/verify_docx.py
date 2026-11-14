@@ -775,7 +775,11 @@ class MatnAlignmentValidator:
             orig_prefix, orig_tail = comp_m.group(1), comp_m.group(2).strip()
             if strip_tashkeel_preserving_citations(orig_prefix) != orig_prefix:
                 return False
-            around = self._matcher.source_window(res.start_pos, res.end_pos)
+            around = re.sub(
+                r"\s+",
+                " ",
+                self.source[max(0, res.start_pos - 4) : min(len(self.source), res.end_pos + 4)],
+            )
             return bool(orig_tail and orig_tail in around)
 
         # Unanchored Fallback
@@ -783,7 +787,10 @@ class MatnAlignmentValidator:
         if has_outer_tashkeel:
             # Allow long-jump verbatim Primary Matn quotes beyond forward_lookahead (non-compound)
             if not COMPOUND_SHARH_SPLIT_RE.match(strip_tashkeel_preserving_citations(inner_collapsed)):
-                return self._matcher.advance_to_canonical_occurrence(inner_collapsed)
+                return (
+                    self._matcher.advance_to_canonical_occurrence(inner_collapsed)
+                    or self._matcher.contains_verbatim(inner_collapsed)
+                )
             return False
 
         if self._matcher.contains_normalized(inner_collapsed):

@@ -57,6 +57,11 @@ COMPOUND_SHARH_SPLIT_RE = re.compile(
 )
 
 
+def _collapse_whitespace(text: str) -> str:
+    """Collapses consecutive whitespace into single spaces and trims ends."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
 class SequentialMatnMatcher:
     def __init__(self, matn_source: str, forward_lookahead: int = 2000):
         self.source = matn_source
@@ -67,7 +72,7 @@ class SequentialMatnMatcher:
         self.history: list[MatnMatchResult] = []
 
         self._search_index = build_search_index(self.source)
-        self._collapsed_source = re.sub(r"\s+", " ", self.source).strip()
+        self._collapsed_source = _collapse_whitespace(self.source)
 
     @property
     def cursor(self) -> int:
@@ -87,9 +92,19 @@ class SequentialMatnMatcher:
             history_length=len(self.history),
         )
 
+    def _forward_window(self) -> tuple[int, int]:
+        """Returns [search_start, window_end) in normalized source coordinates."""
+        overlap = 300
+        search_start = max(0, self._cursor_norm - overlap)
+        window_end = min(
+            len(self._search_index.normalized),
+            self._cursor_norm + self.forward_lookahead,
+        )
+        return search_start, window_end
+
     def contains_verbatim(self, text: str) -> bool:
         """Returns True when whitespace-collapsed text appears verbatim in canonical Matn source."""
-        collapsed = re.sub(r"\s+", " ", text).strip()
+        collapsed = _collapse_whitespace(text)
         return bool(collapsed and collapsed in self._collapsed_source)
 
     def contains_normalized(self, text: str) -> bool:
@@ -97,26 +112,31 @@ class SequentialMatnMatcher:
         norm_q = normalize_arabic_search(text)
         return bool(norm_q and norm_q in self._search_index.normalized)
 
-    def source_window(self, start_pos: int, end_pos: int, *, padding: int = 4) -> str:
-        """Returns whitespace-collapsed canonical Matn source around [start_pos, end_pos)."""
-        lo = max(0, start_pos - padding)
-        hi = min(len(self.source), end_pos + padding)
-        return re.sub(r"\s+", " ", self.source[lo:hi])
-
     def advance_to_canonical_occurrence(self, text: str) -> bool:
-        """Verifies verbatim canonical text and advances the cursor when found beyond current cursor."""
-        if not self.contains_verbatim(text):
-            return False
+        """Advances cursor to the next canonical verbatim occurrence ahead of cursor; returns True if moved."""
+        collapsed = _collapse_whitespace(text)
         norm_q = normalize_arabic_search(text)
-        if norm_q:
-            jump_idx = self._search_index.normalized.find(norm_q, self._cursor_norm)
-            if jump_idx != -1:
-                norm_end = jump_idx + len(norm_q)
-                _, orig_end, _ = self._search_index.extract_span(jump_idx, norm_end)
+        if not collapsed or not norm_q:
+            return False
+
+        norm_source = self._search_index.normalized
+        pos = self._cursor_norm
+        while pos <= len(norm_source) - len(norm_q):
+            idx = norm_source.find(norm_q, pos)
+            if idx == -1:
+                return False
+            norm_end = idx + len(norm_q)
+            orig_start, orig_end, canon_slice = self._search_index.extract_span(idx, norm_end)
+            pad = max(4, len(collapsed) - len(canon_slice) + 4)
+            lo = max(0, orig_start - pad)
+            hi = min(len(self.source), orig_end + pad)
+            if collapsed in _collapse_whitespace(self.source[lo:hi]):
                 self._cursor_norm = norm_end
                 self._active_norm_pos = norm_end
                 self._cursor = orig_end
-        return True
+                return True
+            pos = idx + 1
+        return False
 
     def _record_anchored_match(
         self,
@@ -212,9 +232,7 @@ class SequentialMatnMatcher:
             )
 
         # Multi-word tail: standard forward window then look-behind
-        overlap = 300
-        search_start = max(0, self._cursor_norm - overlap)
-        window_end = min(len(norm_source), self._cursor_norm + self.forward_lookahead)
+        search_start, window_end = self._forward_window()
         norm_start = self._find_whole_word(search_start, window_end, tail_query, reverse=False)
         if norm_start != -1 and (norm_start + len(tail_query)) > self._cursor_norm:
             return self._record_anchored_match(
@@ -265,9 +283,7 @@ class SequentialMatnMatcher:
         norm_source = self._search_index.normalized
 
         # 1. Forward search (allowing overlap for re-read prefixes extending into new text)
-        overlap = 300
-        search_start = max(0, self._cursor_norm - overlap)
-        window_end = min(len(norm_source), self._cursor_norm + self.forward_lookahead)
+        search_start, window_end = self._forward_window()
         forward_slice = norm_source[search_start:window_end]
 
         idx_forward = forward_slice.find(search_query)

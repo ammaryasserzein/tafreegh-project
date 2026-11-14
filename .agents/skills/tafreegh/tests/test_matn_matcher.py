@@ -294,10 +294,7 @@ class TestMatnMatcher(unittest.TestCase):
         self.assertEqual(snap_after.cursor, self.matcher.cursor)
         self.assertEqual(snap_after.cursor_norm, self.matcher.cursor_norm)
         self.assertEqual(snap_after.history_length, 1)
-        self.assertEqual(
-            self.matcher.source_window(res.start_pos, res.end_pos),
-            self.sample_source[max(0, res.start_pos - 4) : min(len(self.sample_source), res.end_pos + 4)],
-        )
+        self.assertGreater(res.end_pos, res.start_pos)
 
     def test_contains_and_advance_to_canonical_occurrence_domain_methods(self):
         filler = " ".join(["كَلِمَةٌ"] * 250)
@@ -317,6 +314,31 @@ class TestMatnMatcher(unittest.TestCase):
         self.assertTrue(matcher.advance_to_canonical_occurrence("وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"))
         self.assertGreater(matcher.cursor, cursor_before)
         self.assertEqual(matcher.cursor, len(long_source))
+        # Already at end: subsequent call returns False because cursor does not advance
+        self.assertFalse(matcher.advance_to_canonical_occurrence("وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"))
+
+    def test_advance_to_canonical_occurrence_skips_non_verbatim_normalized_matches_ahead(self):
+        # First occurrence is canonical (behind cursor after first match),
+        # second occurrence differs in diacritics, third occurrence is canonical.
+        phrase = "قَالَ الْمُصَنِّفُ"
+        variant = "قَالَ المصنف"
+        filler = " ".join(["كَلِمَةٌ"] * 200)
+        source = f"{phrase} {filler} {variant} {filler} {phrase}"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=50)
+        matcher.match_segment("قال المصنف")
+        cursor_after_first = matcher.cursor
+
+        self.assertTrue(matcher.advance_to_canonical_occurrence(phrase))
+        self.assertEqual(matcher.cursor, len(source))
+        self.assertGreater(matcher.cursor, cursor_after_first)
+
+        # If only a non-verbatim normalized variant lies ahead, cursor must stay put and return False
+        source_variant_ahead = f"{phrase} {filler} {variant}"
+        matcher_var = SequentialMatnMatcher(source_variant_ahead, forward_lookahead=50)
+        matcher_var.match_segment("قال المصنف")
+        cursor_var_before = matcher_var.cursor
+        self.assertFalse(matcher_var.advance_to_canonical_occurrence(phrase))
+        self.assertEqual(matcher_var.cursor, cursor_var_before)
 
 
 if __name__ == "__main__":
