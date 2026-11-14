@@ -1,12 +1,15 @@
-"""Shared domain models and issue-recording helper for DOCX QA audit passes."""
+"""Shared domain models, constants, and issue reporting for DOCX QA audit passes."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TypedDict
 
 HEADER_LINE_COUNT = 3
+STUDENT_PREFIX = "طالب:"
+INAUDIBLE_TOKEN = "صوت غير مسموع"
 
 CANONICAL_DUA_TEXT = (
     "والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، "
@@ -26,6 +29,28 @@ class Severity(str, Enum):
     ERROR = "ERROR"
 
 
+class ValidationIssueDict(TypedDict):
+    """Serialized representation of a single ValidationIssue."""
+
+    code: str
+    severity: str
+    paragraph_index: int | None
+    message: str
+    snippet: str
+
+
+class ValidationReportDict(TypedDict):
+    """Serialized JSON structure returned by ValidationReport.to_dict()."""
+
+    docx_path: str
+    passed: bool
+    error_count: int
+    total_paragraphs: int
+    matn_paragraphs: int
+    student_paragraphs: int
+    issues: list[ValidationIssueDict]
+
+
 @dataclass(frozen=True)
 class ParagraphRecord:
     """Normalized paragraph summary produced by OOXML styling inspection."""
@@ -33,6 +58,14 @@ class ParagraphRecord:
     index: int
     text: str
     is_matn: bool
+
+    @property
+    def inner_text(self) -> str:
+        """Return stripped paragraph text with enclosing Matn parentheses removed when applicable."""
+        stripped = self.text.strip()
+        if self.is_matn and stripped.startswith("(") and stripped.endswith(")"):
+            return stripped[1:-1].strip()
+        return stripped
 
 
 @dataclass
@@ -58,13 +91,33 @@ class ValidationReport:
 
     @property
     def error_count(self) -> int:
+        """Return total number of recorded validation errors."""
         return len(self.issues)
 
     @property
     def passed(self) -> bool:
+        """Return True when zero validation errors were recorded."""
         return self.error_count == 0
 
-    def to_dict(self) -> dict:
+    def flag(
+        self,
+        code: str,
+        paragraph_index: int | None,
+        message: str,
+        snippet: str = "",
+    ) -> None:
+        """Record an ERROR ValidationIssue against the report."""
+        self.issues.append(
+            ValidationIssue(
+                code=code,
+                severity=Severity.ERROR,
+                paragraph_index=paragraph_index,
+                message=message,
+                snippet=snippet,
+            )
+        )
+
+    def to_dict(self) -> ValidationReportDict:
         """Serialize the report to a JSON-compatible dictionary."""
         return {
             "docx_path": self.docx_path,
@@ -89,22 +142,3 @@ class ValidationReport:
 def strip_parenthesized_citations(text: str) -> str:
     """Remove parenthesized citations (...) from text before lexical scanning."""
     return _PAREN_CITATION_RE.sub(" ", text)
-
-
-def _flag(
-    report: ValidationReport,
-    code: str,
-    paragraph_index: int | None,
-    message: str,
-    snippet: str = "",
-) -> None:
-    """Append an ERROR issue to report."""
-    report.issues.append(
-        ValidationIssue(
-            code=code,
-            severity=Severity.ERROR,
-            paragraph_index=paragraph_index,
-            message=message,
-            snippet=snippet,
-        )
-    )

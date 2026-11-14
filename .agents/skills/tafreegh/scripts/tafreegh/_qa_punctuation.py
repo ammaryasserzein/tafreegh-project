@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from ._qa_models import HEADER_LINE_COUNT, ParagraphRecord, ValidationReport, _flag
+from ._qa_models import HEADER_LINE_COUNT, ParagraphRecord, ValidationReport
 
 _BRACKET_SPACE_RE = re.compile(r"\(\s+|\s+\)")
 _QUOTE_SPACE_RE = re.compile(r'(?:^|[\s،.:؟!(])"\s+|\s+"(?=$|[\s،.:؟!)])')
@@ -14,16 +14,12 @@ _FORBIDDEN_PUNC_RE = re.compile(r"[,?;[\]{}]")
 _IZHAN_NUN_RE = re.compile(r"(?<!\w)إذن(?!\w)")
 
 
-def _is_standalone_poetry_line(stripped: str, is_matn: bool) -> bool:
+def _is_standalone_poetry_line(rec: ParagraphRecord) -> bool:
     """Return True when a paragraph is a balanced two-hemistich poetry verse separated by ' ... '."""
-    inner = (
-        stripped[1:-1].strip()
-        if (is_matn and stripped.startswith("(") and stripped.endswith(")"))
-        else stripped
-    )
+    inner = rec.inner_text
     if ":" in inner:
         return False
-    if not is_matn and ("(" in inner or ")" in inner):
+    if not rec.is_matn and ("(" in inner or ")" in inner):
         return False
     parts = inner.split(" ... ")
     if len(parts) != 2:
@@ -50,8 +46,7 @@ def check_punctuation_and_orthography(
             continue
 
         if _BRACKET_SPACE_RE.search(stripped):
-            _flag(
-                report,
+            report.flag(
                 "BRACKET_INTERNAL_SPACE",
                 rec.index,
                 f"Paragraph P{rec.index} has internal whitespace inside parentheses '( ... )'.",
@@ -62,17 +57,15 @@ def check_punctuation_and_orthography(
         if q_space_match:
             start = max(0, q_space_match.start() - 20)
             end = min(len(stripped), q_space_match.end() + 20)
-            _flag(
-                report,
+            report.flag(
                 "QUOTE_INTERNAL_SPACE",
                 rec.index,
                 f"Paragraph P{rec.index} has internal whitespace inside quotes '\" ... \"'.",
                 stripped[start:end],
             )
 
-        if ".." in stripped and not _is_standalone_poetry_line(stripped, rec.is_matn):
-            _flag(
-                report,
+        if ".." in stripped and not _is_standalone_poetry_line(rec):
+            report.flag(
                 "ELLIPSIS_FORBIDDEN",
                 rec.index,
                 f"Paragraph P{rec.index} contains ellipsis ('...' or '..') outside a standalone poetry line.",
@@ -85,8 +78,7 @@ def check_punctuation_and_orthography(
                 text_no_ellipsis[:-1] if text_no_ellipsis.endswith(".") else text_no_ellipsis
             )
             if _MID_PERIOD_RE.search(body_before_end):
-                _flag(
-                    report,
+                report.flag(
                     "MID_PARAGRAPH_PERIOD",
                     rec.index,
                     f"Non-Matn paragraph P{rec.index} contains a mid-paragraph period ('.'); replace with '،' or split paragraph.",
@@ -95,8 +87,7 @@ def check_punctuation_and_orthography(
 
         forbidden_punc = _FORBIDDEN_PUNC_RE.findall(stripped)
         if forbidden_punc:
-            _flag(
-                report,
+            report.flag(
                 "FORBIDDEN_PUNCTUATION",
                 rec.index,
                 f"Paragraph P{rec.index} contains forbidden punctuation/brackets {set(forbidden_punc)}.",
@@ -104,8 +95,7 @@ def check_punctuation_and_orthography(
             )
 
         if not rec.is_matn and _IZHAN_NUN_RE.search(stripped):
-            _flag(
-                report,
+            report.flag(
                 "ORTHOGRAPHY_IZHAN_NUN",
                 rec.index,
                 f"Paragraph P{rec.index} writes 'إذن' with nun; standardize to 'إذًا'.",

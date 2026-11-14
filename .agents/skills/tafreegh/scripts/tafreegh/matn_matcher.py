@@ -17,6 +17,7 @@ from enum import Enum
 
 from .arabic_normalizer import (
     build_search_index,
+    collapse_whitespace,
     normalize_arabic_search,
     strip_tashkeel_preserving_citations,
 )
@@ -57,9 +58,7 @@ COMPOUND_SHARH_SPLIT_RE = re.compile(
 )
 
 
-def _collapse_whitespace(text: str) -> str:
-    """Collapses consecutive whitespace into single spaces and trims ends."""
-    return re.sub(r"\s+", " ", text).strip()
+_collapse_whitespace = collapse_whitespace
 
 
 class SequentialMatnMatcher:

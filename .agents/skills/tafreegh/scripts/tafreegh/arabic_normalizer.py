@@ -58,11 +58,18 @@ def strip_tashkeel_preserving_citations(text: str) -> str:
     )
 
 
+def collapse_whitespace(text: str) -> str:
+    """Collapse consecutive whitespace into single spaces and trim both ends."""
+    if not text:
+        return ""
+    return _WHITESPACE_RE.sub(" ", text).strip()
+
+
 def normalize_arabic(text: str) -> str:
     """Fold hamzas/alif-wasl and collapse whitespace while preserving diacritics, ta-marbuta, alif-maqsura, and punctuation."""
     if not text:
         return ""
-    return _WHITESPACE_RE.sub(" ", text.translate(_HAMZA_TABLE)).strip()
+    return collapse_whitespace(text.translate(_HAMZA_TABLE))
 
 
 def normalize_arabic_token(text: str) -> str:

@@ -27,7 +27,9 @@ DEFAULT_FONT_SIZE = 18
 DEFAULT_MARGIN_INCHES = 0.5
 MARGIN_TOLERANCE_INCHES = 0.02
 DEFAULT_BIDI_LANG = "ar-SA"
-HYBRID_SUMMARY_HEADING = "### تقرير المتن الهجين"
+HYBRID_SUMMARY_TITLE = "تقرير المتن الهجين"
+HYBRID_SUMMARY_HEADING = f"### {HYBRID_SUMMARY_TITLE}"
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->")
 
 _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _W_NS_MAP = {"w": _W_NS}

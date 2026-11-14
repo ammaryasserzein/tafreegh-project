@@ -1158,6 +1158,21 @@ class TestMatnAlignmentValidator(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, msg=f"stderr={proc.stderr}")
 
+    def test_qa_models_and_matn_alignment_validator_contracts(self):
+        from tafreegh import _qa_models
+        from tafreegh.verify_docx import ParagraphRecord, ValidationReport
+
+        self.assertFalse(hasattr(_qa_models, "_flag"))
+        self.assertFalse(hasattr(MatnAlignmentValidator, "verify_segment"))
+
+        rec = ParagraphRecord(index=3, text="  (بِسْمِ اللَّهِ)  ", is_matn=True)
+        self.assertEqual(rec.inner_text, "بِسْمِ اللَّهِ")
+
+        report = ValidationReport(docx_path="sample.docx")
+        report.flag("SAMPLE", 3, "msg", "snip")
+        self.assertEqual(report.error_count, 1)
+        self.assertFalse(report.passed)
+
 
 if __name__ == "__main__":
     unittest.main()

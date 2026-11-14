@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import re
 
-from ._qa_models import HEADER_LINE_COUNT, ParagraphRecord, ValidationReport, _flag
+from ._qa_models import HEADER_LINE_COUNT, STUDENT_PREFIX, ParagraphRecord, ValidationReport
 from .arabic_normalizer import normalize_arabic, strip_tashkeel
 
-FALLBACK_MATN_TRIGGERS: list[tuple[str, re.Pattern[str]]] = [
+FALLBACK_MATN_TRIGGERS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("قالوا", re.compile(r"(?:^|[،.؟!:)»\"\s])(قالوا\s*:?\s*[^.؟!\n]+)")),
     ("فإن قلت", re.compile(r"(?:^|[،.؟!:)»\"\s])(فإن\s+قلت\s*:?\s*[^.؟!\n]+)")),
     ("قلت", re.compile(r"(?:^|[،.؟!:)»\"\s])(قلت(?:\s+في)?\s*:?\s*[^.؟!\n]+)")),
@@ -15,7 +15,7 @@ FALLBACK_MATN_TRIGGERS: list[tuple[str, re.Pattern[str]]] = [
     ("فصل في", re.compile(r"(?:^|[،.؟!:)»\"\s])(فصل\s+في\s+[\u0600-\u06FF\s]{4,40}?)(?=[،.؟!]|$)")),
     ("قال الشاعر", re.compile(r"(?:^|[،.؟!:)»\"])\s*([^،.؟!\n]+[،:]\s*قال\s+الشاعر\s*:?)")),
     ("قال", re.compile(r"(?:^|[،.؟!:)»\"\s])(قال(?!\s+(?:تعالى|الله|النبي|رسول))\s*:\s*[^.؟!\n]+)")),
-]
+)
 
 _ARABIC_WORD_RE = re.compile(r"[\u0600-\u06FF]+")
 _HO_WALA_RE = re.compile(r"(?<!\w)هو\s+[\u0600-\u06FF\s]+\s+ولا\s+")
@@ -24,7 +24,7 @@ _CLAUSE_SPLIT_RE = re.compile(r"https?://|\s*-\s*يعني\s+|[،]")
 
 def _has_colloquial_marker(
     text: str,
-    dialect_markers: frozenset[str] | set[str],
+    normalized_markers: frozenset[str] | set[str],
 ) -> bool:
     """Return True if text contains Egyptian colloquial words or verbal negation/future patterns."""
     plain = strip_tashkeel(text)
@@ -32,7 +32,7 @@ def _has_colloquial_marker(
         return True
     for word in _ARABIC_WORD_RE.findall(plain):
         word_norm = normalize_arabic(word)
-        if word in dialect_markers or word_norm in dialect_markers:
+        if word in normalized_markers or word_norm in normalized_markers:
             return True
         if word.startswith(("هت", "هي", "بي", "بت", "ما")) and word.endswith("ش") and len(word) >= 4:
             return True
@@ -41,7 +41,7 @@ def _has_colloquial_marker(
 
 def _extract_leading_classical_clause(
     candidate: str,
-    dialect_markers: frozenset[str] | set[str],
+    normalized_markers: frozenset[str] | set[str],
 ) -> str:
     """Extract consecutive leading Classical Arabic sub-clauses before any colloquial shift."""
     classical_parts: list[str] = []
@@ -49,7 +49,7 @@ def _extract_leading_classical_clause(
         sub_clean = sub.strip(" .؟!:-")
         if not sub_clean:
             continue
-        if _has_colloquial_marker(sub_clean, dialect_markers):
+        if _has_colloquial_marker(sub_clean, normalized_markers):
             break
         classical_parts.append(sub_clean)
     return "، ".join(classical_parts)
@@ -61,21 +61,24 @@ def check_unbolded_fallback_matn(
     dialect_markers: frozenset[str] | set[str],
 ) -> None:
     """Detect unbolded Classical Arabic Sharh/Matn clauses inside explanation paragraphs."""
+    normalized_markers = {
+        normalize_arabic(strip_tashkeel(marker)) for marker in dialect_markers
+    } | set(dialect_markers)
+
     for rec in para_records:
         if rec.index < HEADER_LINE_COUNT or rec.is_matn:
             continue
         stripped = rec.text.strip()
-        if not stripped or stripped.startswith("طالب:"):
+        if not stripped or stripped.startswith(STUDENT_PREFIX):
             continue
 
         for label, pat in FALLBACK_MATN_TRIGGERS:
             for m in pat.finditer(stripped):
                 cand = m.group(1).strip()
-                core_clause = _extract_leading_classical_clause(cand, dialect_markers)
+                core_clause = _extract_leading_classical_clause(cand, normalized_markers)
                 words = _ARABIC_WORD_RE.findall(core_clause)
-                if len(words) >= 4 and not _has_colloquial_marker(core_clause, dialect_markers):
-                    _flag(
-                        report,
+                if len(words) >= 4:
+                    report.flag(
                         "UNBOLDED_FALLBACK_MATN",
                         rec.index,
                         (

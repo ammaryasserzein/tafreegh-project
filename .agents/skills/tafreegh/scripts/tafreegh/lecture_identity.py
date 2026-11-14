@@ -11,6 +11,12 @@ from .arabic_normalizer import normalize_arabic, normalize_arabic_token
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
+AUDIO_FILENAME_EXT_RE = re.compile(r"\.(?:mp3|m4a|wav|aac|ogg|opus)\b", re.IGNORECASE)
+NOTEBOOKLM_TAG_RE = re.compile(
+    r"(?:button[\\_]*magic|source\s*guide|دليل\s*المصادر|دليل\s*المصدر)",
+    re.IGNORECASE,
+)
+
 NOTEBOOKLM_HEADER_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r'^(?:المصادر|مصادر|المصدر|دليل المصدر|دليل مصادر)$', re.IGNORECASE),
     re.compile(r'^(?:source\s*guide|sources)$', re.IGNORECASE),

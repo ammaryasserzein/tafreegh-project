@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
-from ._qa_models import ParagraphRecord, ValidationReport, _flag
-from .arabic_normalizer import strip_tashkeel_preserving_citations
+from ._qa_models import ParagraphRecord, ValidationReport
+from .arabic_normalizer import collapse_whitespace, strip_tashkeel_preserving_citations
 from .matn_matcher import (
     COMPOUND_SHARH_SPLIT_RE,
     MatchMode,
@@ -19,6 +18,7 @@ class MatnAlignmentValidator:
     """Non-destructive Matn alignment verifier delegating to SequentialMatnMatcher public queries."""
 
     def __init__(self, matn_source: str | SequentialMatnMatcher) -> None:
+        """Initialize a fresh SequentialMatnMatcher cursor over matn_source text."""
         source_text = matn_source.source if isinstance(matn_source, SequentialMatnMatcher) else matn_source
         self.source = source_text
         self._matcher = SequentialMatnMatcher(source_text)
@@ -35,12 +35,12 @@ class MatnAlignmentValidator:
 
     def verify_exported_segment(self, exported_text: str) -> bool:
         """Verify an exported Matn paragraph against canonical Matn source without violating cursor semantics."""
-        inner_collapsed = re.sub(r"\s+", " ", exported_text).strip()
+        inner_collapsed = collapse_whitespace(exported_text)
         if not inner_collapsed:
             return True
 
         res = self._matcher.match_segment(inner_collapsed)
-        res_collapsed = re.sub(r"\s+", " ", res.text).strip()
+        res_collapsed = collapse_whitespace(res.text)
 
         if res.mode == MatchMode.PRIMARY:
             return inner_collapsed == res_collapsed or self._matcher.contains_verbatim(inner_collapsed)
@@ -54,10 +54,8 @@ class MatnAlignmentValidator:
             orig_prefix, orig_tail = comp_m.group(1), comp_m.group(2).strip()
             if strip_tashkeel_preserving_citations(orig_prefix) != orig_prefix:
                 return False
-            around = re.sub(
-                r"\s+",
-                " ",
-                self.source[max(0, res.start_pos - 4) : min(len(self.source), res.end_pos + 4)],
+            around = collapse_whitespace(
+                self.source[max(0, res.start_pos - 4) : min(len(self.source), res.end_pos + 4)]
             )
             return bool(orig_tail and orig_tail in around)
 
@@ -75,17 +73,13 @@ class MatnAlignmentValidator:
 
         return True
 
-    def verify_segment(self, exported_text: str) -> bool:
-        """Alias for verify_exported_segment."""
-        return self.verify_exported_segment(exported_text)
-
 
 def check_matn_alignment(
     para_records: list[ParagraphRecord],
     matn_path: Path,
     report: ValidationReport,
 ) -> None:
-    """Verify Primary Mode and compound Sharh-Matn blocks against canonical Matn source."""
+    """Verify Primary Mode and Compound Sharh-Matn blocks against canonical Matn source."""
     if not matn_path.exists():
         return
     matn_source = read_matn_source_content(matn_path)
@@ -94,12 +88,10 @@ def check_matn_alignment(
     for rec in para_records:
         if not rec.is_matn:
             continue
-        stripped = rec.text.strip()
-        inner = stripped[1:-1].strip() if (stripped.startswith("(") and stripped.endswith(")")) else stripped
+        inner = rec.inner_text
         if not validator.verify_exported_segment(inner):
-            inner_collapsed = re.sub(r"\s+", " ", inner).strip()
-            _flag(
-                report,
+            inner_collapsed = collapse_whitespace(inner)
+            report.flag(
                 "MATN_SOURCE_MISMATCH",
                 rec.index,
                 (

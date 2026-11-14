@@ -8,35 +8,48 @@ from pathlib import Path
 from ._qa_models import (
     CANONICAL_DUA_PATTERN,
     HEADER_LINE_COUNT,
+    INAUDIBLE_TOKEN,
+    STUDENT_PREFIX,
     ParagraphRecord,
     ValidationReport,
-    _flag,
     strip_parenthesized_citations,
 )
 from .arabic_normalizer import normalize_arabic_search
-
-_AUDIO_EXT_RE = re.compile(r"\.(?:mp3|m4a|wav|aac|ogg|opus)\b", re.IGNORECASE)
-_NOTEBOOKLM_TAG_RE = re.compile(
-    r"source\s*guide|button[\\_]*magic|دليل\s*المصدر|المصادر",
-    re.IGNORECASE,
+from .lecture_identity import (
+    AUDIO_FILENAME_EXT_RE,
+    NOTEBOOKLM_HEADER_PATTERNS,
+    NOTEBOOKLM_TAG_RE,
 )
-_STUDENT_PREFIX_RE = re.compile(r"^طالب:\s*")
+
+_STUDENT_PREFIX_RE = re.compile(rf"^{re.escape(STUDENT_PREFIX)}\s*")
 _FILLER_TOKENS = frozenset({"ا", "اا", "ااا", "ام", "اه", "ها", "و"})
 
 
-def _clean_raw_for_coverage(raw_text: str) -> list[str]:
-    """Clean raw transcript lines and tokenize words for sliding-window coverage checks."""
+def _tokenize_cleaned_prose(text: str) -> list[str]:
+    """Strip NotebookLM tags/audio filenames and tokenize cleaned Arabic words for coverage checks."""
     lines: list[str] = []
-    for line in raw_text.splitlines():
+    for line in text.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
-        if _AUDIO_EXT_RE.search(stripped) or _NOTEBOOKLM_TAG_RE.search(stripped):
+        if (
+            any(pat.match(stripped) for pat in NOTEBOOKLM_HEADER_PATTERNS)
+            or AUDIO_FILENAME_EXT_RE.search(stripped)
+            or NOTEBOOKLM_TAG_RE.search(stripped)
+        ):
             continue
         lines.append(stripped)
 
     norm = normalize_arabic_search(" ".join(lines))
     return [w for w in norm.split() if w not in _FILLER_TOKENS]
+
+
+def _build_word_index(words: list[str]) -> tuple[set[str], set[str]]:
+    """Build unigram and adjacent bigram lookup sets from normalized words."""
+    return (
+        set(words),
+        {f"{words[i]} {words[i + 1]}" for i in range(len(words) - 1)},
+    )
 
 
 def _find_unmatched_windows(
@@ -73,7 +86,7 @@ def check_raw_coverage(
     if not raw_path.exists():
         return
     raw_text = raw_path.read_text(encoding="utf-8")
-    raw_words = _clean_raw_for_coverage(raw_text)
+    raw_words = _tokenize_cleaned_prose(raw_text)
     window_size = 12
     if len(raw_words) < window_size:
         return
@@ -82,41 +95,31 @@ def check_raw_coverage(
         rec.text for rec in para_records if rec.index >= HEADER_LINE_COUNT and rec.text.strip()
     ]
     docx_words_list = normalize_arabic_search(" ".join(body_texts)).split()
-    docx_words_set = set(docx_words_list)
-    docx_bigrams = {
-        f"{docx_words_list[i]} {docx_words_list[i + 1]}"
-        for i in range(len(docx_words_list) - 1)
-    }
+    docx_words_set, docx_bigrams = _build_word_index(docx_words_list)
 
     for dropped_phrase in _find_unmatched_windows(raw_words, docx_words_set, docx_bigrams, window_size):
-        _flag(
-            report,
+        report.flag(
             "RAW_COVERAGE_DROP",
             None,
             f"Raw transcript clause appears dropped from .docx: '{dropped_phrase}'.",
             dropped_phrase,
         )
 
-    raw_words_set = set(raw_words)
-    raw_bigrams = {
-        f"{raw_words[i]} {raw_words[i + 1]}"
-        for i in range(len(raw_words) - 1)
-    }
+    raw_words_set, raw_bigrams = _build_word_index(raw_words)
 
     for rec in para_records:
         if rec.index < HEADER_LINE_COUNT or rec.is_matn:
             continue
         p_clean = CANONICAL_DUA_PATTERN.sub("", rec.text.strip())
         p_clean = _STUDENT_PREFIX_RE.sub("", p_clean)
-        p_clean = p_clean.replace("صوت غير مسموع", "")
+        p_clean = p_clean.replace(INAUDIBLE_TOKEN, "")
         p_clean = strip_parenthesized_citations(p_clean)
-        p_words = _clean_raw_for_coverage(p_clean)
+        p_words = _tokenize_cleaned_prose(p_clean)
         if len(p_words) < window_size:
             continue
 
         for added_phrase in _find_unmatched_windows(p_words, raw_words_set, raw_bigrams, window_size):
-            _flag(
-                report,
+            report.flag(
                 "RAW_HALLUCINATION_ADDITION",
                 rec.index,
                 f"Paragraph P{rec.index} contains a clause not found in raw transcript: '{added_phrase}'.",

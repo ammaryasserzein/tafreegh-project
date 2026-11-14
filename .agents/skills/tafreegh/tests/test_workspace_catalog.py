@@ -294,10 +294,15 @@ class TestRuleCatalogDialectAndAnonymization:
 class TestZeroImportIoAndModulePurity:
     def test_importing_all_tafreegh_modules_performs_zero_disk_reads(self):
         scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
-        probe = """
+        pkg_dir = scripts_dir / "tafreegh"
+        module_names = ["tafreegh"] + sorted(
+            f"tafreegh.{py_file.stem}"
+            for py_file in pkg_dir.glob("*.py")
+            if py_file.stem != "__init__"
+        )
+        probe = f"""
 import builtins
 import importlib
-import sys
 from pathlib import Path
 
 recorded = []
@@ -320,25 +325,11 @@ def wrapped_open(file, *args, **kwargs):
     return orig_open(file, *args, **kwargs)
 builtins.open = wrapped_open
 
-modules = [
-    "tafreegh",
-    "tafreegh.workspace_catalog",
-    "tafreegh.arabic_normalizer",
-    "tafreegh.lecture_identity",
-    "tafreegh.matn_matcher",
-    "tafreegh.read_docx",
-    "tafreegh.word_gateway",
-    "tafreegh.export_docx",
-    "tafreegh.verify_docx",
-    "tafreegh.fetch_training_data",
-    "tafreegh.diff_cues",
-    "tafreegh.diff_inline_matn",
-    "tafreegh.chunk_transcript",
-]
+modules = {module_names!r}
 for mod in modules:
     importlib.import_module(mod)
 
-assert recorded == [], f"Unexpected import-time filesystem I/O: {recorded}"
+assert recorded == [], f"Unexpected import-time filesystem I/O: {{recorded}}"
 """
         proc = subprocess.run(
             [sys.executable, "-B", "-c", probe],
@@ -354,7 +345,7 @@ assert recorded == [], f"Unexpected import-time filesystem I/O: {recorded}"
         pkg_dir = Path(__file__).resolve().parent.parent / "scripts" / "tafreegh"
         for py_file in sorted(pkg_dir.glob("*.py")):
             content = py_file.read_text(encoding="utf-8")
-            assert r"Users\L" not in content and "Users/L" not in content, (
+            assert r"users\l" not in content.lower() and "users/l" not in content.lower(), (
                 f"Hardcoded personal path found in {py_file.name}"
             )
 
