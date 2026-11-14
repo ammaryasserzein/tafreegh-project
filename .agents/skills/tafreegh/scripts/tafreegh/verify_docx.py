@@ -736,14 +736,15 @@ class MatnAlignmentValidator:
     """Validator seam component verifying exported Matn blocks against canonical <matn_source> non-destructively."""
 
     def __init__(self, matn_source: str | SequentialMatnMatcher):
-        if isinstance(matn_source, SequentialMatnMatcher):
-            self.source = matn_source.source
-        else:
-            self.source = matn_source
-        self._collapsed_source = re.sub(r"\s+", " ", self.source).strip()
+        source_text = (
+            matn_source.source
+            if isinstance(matn_source, SequentialMatnMatcher)
+            else matn_source
+        )
+        self.source = source_text
         # Internal sequential matcher isolated to this validator instance;
         # will never mutate any external domain matcher passed in.
-        self._matcher = SequentialMatnMatcher(self.source)
+        self._matcher = SequentialMatnMatcher(source_text)
 
     @property
     def cursor(self) -> int:
@@ -763,7 +764,7 @@ class MatnAlignmentValidator:
         res_collapsed = re.sub(r"\s+", " ", res.text).strip()
 
         if res.mode == MatchMode.PRIMARY:
-            return inner_collapsed == res_collapsed or inner_collapsed in self._collapsed_source
+            return inner_collapsed == res_collapsed or self._matcher.contains_verbatim(inner_collapsed)
 
         if res.is_source_anchored:
             if inner_collapsed == res_collapsed:
@@ -774,52 +775,24 @@ class MatnAlignmentValidator:
             orig_prefix, orig_tail = comp_m.group(1), comp_m.group(2).strip()
             if strip_tashkeel_preserving_citations(orig_prefix) != orig_prefix:
                 return False
-            around = re.sub(
-                r"\s+",
-                " ",
-                self.source[max(0, res.start_pos - 4) : min(len(self.source), res.end_pos + 4)],
-            )
+            around = self._matcher.source_window(res.start_pos, res.end_pos)
             return bool(orig_tail and orig_tail in around)
 
         # Unanchored Fallback
         has_outer_tashkeel = strip_tashkeel_preserving_citations(inner_collapsed) != inner_collapsed
         if has_outer_tashkeel:
             # Allow long-jump verbatim Primary Matn quotes beyond forward_lookahead (non-compound)
-            if (
-                not COMPOUND_SHARH_SPLIT_RE.match(strip_tashkeel_preserving_citations(inner_collapsed))
-                and inner_collapsed in self._collapsed_source
-            ):
-                norm_q = normalize_arabic_search(inner_collapsed)
-                jump_idx = self._matcher.norm_source.find(norm_q, self._matcher.cursor_norm)
-                if jump_idx != -1:
-                    self._matcher.cursor_norm = jump_idx + len(norm_q)
-                    self._matcher.cursor = (
-                        self._matcher.pos_map[self._matcher.cursor_norm - 1] + 1
-                    )
-                return True
+            if not COMPOUND_SHARH_SPLIT_RE.match(strip_tashkeel_preserving_citations(inner_collapsed)):
+                return self._matcher.advance_to_canonical_occurrence(inner_collapsed)
             return False
 
-        norm_query = normalize_arabic_search(inner_collapsed)
-        if norm_query and norm_query in self._matcher.norm_source:
-            return inner_collapsed in self._collapsed_source
+        if self._matcher.contains_normalized(inner_collapsed):
+            return self._matcher.contains_verbatim(inner_collapsed)
         return True
 
     def verify_segment(self, exported_text: str) -> bool:
         """Alias for verify_exported_segment."""
         return self.verify_exported_segment(exported_text)
-
-
-def _verify_exported_matn_segment(
-    exported_text: str,
-    matn_source: str | SequentialMatnMatcher | None = None,
-    matcher: SequentialMatnMatcher | None = None,
-) -> bool:
-    """Functional validator seam helper verifying an exported segment without mutating external matcher state."""
-    target = matcher if matcher is not None else matn_source
-    if target is None:
-        raise ValueError("Either matn_source or matcher must be provided")
-    validator = MatnAlignmentValidator(target)
-    return validator.verify_exported_segment(exported_text)
 
 
 def _check_matn_alignment(

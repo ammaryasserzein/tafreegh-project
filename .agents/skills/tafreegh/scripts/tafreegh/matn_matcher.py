@@ -43,6 +43,15 @@ class MatnMatchResult:
         return self.start_pos >= 0
 
 
+@dataclass(frozen=True)
+class MatnCursorSnapshot:
+    """Read-only snapshot of SequentialMatnMatcher alignment cursor and history size."""
+
+    cursor: int
+    cursor_norm: int
+    history_length: int
+
+
 COMPOUND_SHARH_SPLIT_RE = re.compile(
     r"^(.+?(?:بقوله|في قوله|قوله)\s*[،:]\s*)(.+)$"
 )
@@ -52,15 +61,62 @@ class SequentialMatnMatcher:
     def __init__(self, matn_source: str, forward_lookahead: int = 2000):
         self.source = matn_source
         self.forward_lookahead = forward_lookahead
-        self.cursor = 0
-        self.cursor_norm = 0
+        self._cursor = 0
+        self._cursor_norm = 0
         self._active_norm_pos = 0
         self.history: list[MatnMatchResult] = []
 
         self._search_index = build_search_index(self.source)
-        self.norm_source = self._search_index.normalized
-        self.pos_map = self._search_index.pos_map
         self._collapsed_source = re.sub(r"\s+", " ", self.source).strip()
+
+    @property
+    def cursor(self) -> int:
+        """Read-only source character offset of the high-water Sequential Cursor."""
+        return self._cursor
+
+    @property
+    def cursor_norm(self) -> int:
+        """Read-only normalized character offset of the high-water Sequential Cursor."""
+        return self._cursor_norm
+
+    def snapshot(self) -> MatnCursorSnapshot:
+        """Returns an immutable snapshot of cursor offsets and recorded history count."""
+        return MatnCursorSnapshot(
+            cursor=self._cursor,
+            cursor_norm=self._cursor_norm,
+            history_length=len(self.history),
+        )
+
+    def contains_verbatim(self, text: str) -> bool:
+        """Returns True when whitespace-collapsed text appears verbatim in canonical Matn source."""
+        collapsed = re.sub(r"\s+", " ", text).strip()
+        return bool(collapsed and collapsed in self._collapsed_source)
+
+    def contains_normalized(self, text: str) -> bool:
+        """Returns True when normalized Arabic text matches anywhere in canonical Matn source."""
+        norm_q = normalize_arabic_search(text)
+        return bool(norm_q and norm_q in self._search_index.normalized)
+
+    def source_window(self, start_pos: int, end_pos: int, *, padding: int = 4) -> str:
+        """Returns whitespace-collapsed canonical Matn source around [start_pos, end_pos)."""
+        lo = max(0, start_pos - padding)
+        hi = min(len(self.source), end_pos + padding)
+        return re.sub(r"\s+", " ", self.source[lo:hi])
+
+    def advance_to_canonical_occurrence(self, text: str) -> bool:
+        """Verifies verbatim canonical text and advances the cursor when found beyond current cursor."""
+        if not self.contains_verbatim(text):
+            return False
+        norm_q = normalize_arabic_search(text)
+        if norm_q:
+            jump_idx = self._search_index.normalized.find(norm_q, self._cursor_norm)
+            if jump_idx != -1:
+                norm_end = jump_idx + len(norm_q)
+                _, orig_end, _ = self._search_index.extract_span(jump_idx, norm_end)
+                self._cursor_norm = norm_end
+                self._active_norm_pos = norm_end
+                self._cursor = orig_end
+        return True
 
     def _record_anchored_match(
         self,
@@ -76,8 +132,8 @@ class SequentialMatnMatcher:
         orig_start, orig_end, canon_slice = self._search_index.extract_span(norm_start, norm_end)
         self._active_norm_pos = norm_end
         if not is_re_read:
-            self.cursor_norm = norm_end
-            self.cursor = orig_end
+            self._cursor_norm = norm_end
+            self._cursor = orig_end
         res = MatnMatchResult(
             mode=mode,
             text=f"{prefix}{canon_slice}",
@@ -90,19 +146,21 @@ class SequentialMatnMatcher:
         return res
 
     def _is_whole_word_span(self, norm_start: int, norm_end: int) -> bool:
-        """Checks that [norm_start:norm_end] lies on token boundaries in self.norm_source."""
-        left_ok = norm_start == 0 or self.norm_source[norm_start - 1] == " "
-        right_ok = norm_end == len(self.norm_source) or self.norm_source[norm_end] == " "
+        """Checks that [norm_start:norm_end] lies on token boundaries in normalized source."""
+        norm_source = self._search_index.normalized
+        left_ok = norm_start == 0 or norm_source[norm_start - 1] == " "
+        right_ok = norm_end == len(norm_source) or norm_source[norm_end] == " "
         return left_ok and right_ok
 
     def _find_whole_word(self, start: int, end: int, query: str, reverse: bool = False) -> int:
-        """Finds query on token boundaries within self.norm_source[start:end]. Returns absolute norm index or -1."""
+        """Finds query on token boundaries within normalized source[start:end]. Returns absolute norm index or -1."""
         if not query or end <= start:
             return -1
+        norm_source = self._search_index.normalized
         if not reverse:
             pos = start
             while pos <= end - len(query):
-                idx = self.norm_source.find(query, pos, end)
+                idx = norm_source.find(query, pos, end)
                 if idx == -1:
                     return -1
                 if self._is_whole_word_span(idx, idx + len(query)):
@@ -111,7 +169,7 @@ class SequentialMatnMatcher:
             return -1
         pos = end
         while pos - start >= len(query):
-            idx = self.norm_source.rfind(query, start, pos)
+            idx = norm_source.rfind(query, start, pos)
             if idx == -1:
                 return -1
             if self._is_whole_word_span(idx, idx + len(query)):
@@ -131,12 +189,13 @@ class SequentialMatnMatcher:
         if not tail_query or len(tail_query) < 3:
             return None
 
+        norm_source = self._search_index.normalized
         is_single_word = " " not in tail_query
         if is_single_word:
             # Single-word tail must sit in a tight 120-char forward window at active reading position (or high-water cursor)
             norm_start = -1
-            for base_pos in dict.fromkeys((self._active_norm_pos, self.cursor_norm)):
-                win_end = min(len(self.norm_source), base_pos + 120)
+            for base_pos in dict.fromkeys((self._active_norm_pos, self._cursor_norm)):
+                win_end = min(len(norm_source), base_pos + 120)
                 norm_start = self._find_whole_word(base_pos, win_end, tail_query, reverse=False)
                 if norm_start != -1:
                     break
@@ -148,16 +207,16 @@ class SequentialMatnMatcher:
                 norm_end,
                 mode=MatchMode.FALLBACK,
                 is_fallback=True,
-                is_re_read=norm_end <= self.cursor_norm,
+                is_re_read=norm_end <= self._cursor_norm,
                 prefix=sharh_prefix,
             )
 
         # Multi-word tail: standard forward window then look-behind
         overlap = 300
-        search_start = max(0, self.cursor_norm - overlap)
-        window_end = min(len(self.norm_source), self.cursor_norm + self.forward_lookahead)
+        search_start = max(0, self._cursor_norm - overlap)
+        window_end = min(len(norm_source), self._cursor_norm + self.forward_lookahead)
         norm_start = self._find_whole_word(search_start, window_end, tail_query, reverse=False)
-        if norm_start != -1 and (norm_start + len(tail_query)) > self.cursor_norm:
+        if norm_start != -1 and (norm_start + len(tail_query)) > self._cursor_norm:
             return self._record_anchored_match(
                 norm_start,
                 norm_start + len(tail_query),
@@ -167,7 +226,7 @@ class SequentialMatnMatcher:
                 prefix=sharh_prefix,
             )
 
-        idx_behind = self._find_whole_word(0, self.cursor_norm, tail_query, reverse=True)
+        idx_behind = self._find_whole_word(0, self._cursor_norm, tail_query, reverse=True)
         if idx_behind != -1:
             return self._record_anchored_match(
                 idx_behind,
@@ -203,17 +262,19 @@ class SequentialMatnMatcher:
         if not search_query or len(search_query) < 3:
             return self._create_fallback_result(spoken_segment)
 
+        norm_source = self._search_index.normalized
+
         # 1. Forward search (allowing overlap for re-read prefixes extending into new text)
         overlap = 300
-        search_start = max(0, self.cursor_norm - overlap)
-        window_end = min(len(self.norm_source), self.cursor_norm + self.forward_lookahead)
-        forward_slice = self.norm_source[search_start:window_end]
+        search_start = max(0, self._cursor_norm - overlap)
+        window_end = min(len(norm_source), self._cursor_norm + self.forward_lookahead)
+        forward_slice = norm_source[search_start:window_end]
 
         idx_forward = forward_slice.find(search_query)
         if idx_forward != -1:
             norm_start = search_start + idx_forward
             norm_end = norm_start + len(search_query)
-            if norm_end > self.cursor_norm:
+            if norm_end > self._cursor_norm:
                 return self._record_anchored_match(
                     norm_start,
                     norm_end,
@@ -223,7 +284,7 @@ class SequentialMatnMatcher:
                 )
 
         # 2. Look-behind search (0 -> cursor_norm)
-        lookbehind_slice = self.norm_source[:self.cursor_norm]
+        lookbehind_slice = norm_source[:self._cursor_norm]
         idx_behind = lookbehind_slice.rfind(search_query)
         if idx_behind != -1:
             return self._record_anchored_match(

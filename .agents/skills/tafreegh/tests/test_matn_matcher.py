@@ -2,6 +2,7 @@ import unittest
 
 from tafreegh.matn_matcher import (
     MatchMode,
+    MatnCursorSnapshot,
     SequentialMatnMatcher,
     format_matn_segment,
     generate_fallback_summary,
@@ -259,7 +260,7 @@ class TestMatnMatcher(unittest.TestCase):
             "عن ابن مسعود قال اني لارجو ان تكونوا نصف اهل الجنه وذلك ان الجنه لا يدخلها الا نفس مسلمه"
         )
         self.assertEqual(full.mode, MatchMode.PRIMARY)
-        self.assertEqual(matcher.cursor_norm, len(matcher.norm_source))
+        self.assertEqual(matcher.cursor, len(source))
 
         # 2. Sheikh re-reads clause before 'وَذَلِكَ' during commentary
         reread = matcher.match_segment("اني لارجو ان تكونوا نصف اهل الجنه")
@@ -275,6 +276,47 @@ class TestMatnMatcher(unittest.TestCase):
         """SequentialMatnMatcher is a generation pipeline engine; validation heuristics belong in verify_docx (CODING_STANDARDS § 6)."""
         self.assertFalse(hasattr(self.matcher, "verify_exported_segment"))
         self.assertFalse(hasattr(SequentialMatnMatcher, "verify_exported_segment"))
+
+    def test_encapsulates_internal_buffers_and_exposes_read_only_cursor_and_snapshot(self):
+        self.assertFalse(hasattr(self.matcher, "norm_source"))
+        self.assertFalse(hasattr(self.matcher, "pos_map"))
+
+        snap_init = self.matcher.snapshot()
+        self.assertEqual(snap_init, MatnCursorSnapshot(cursor=0, cursor_norm=0, history_length=0))
+
+        with self.assertRaises(AttributeError):
+            self.matcher.cursor = 10  # type: ignore[misc]
+        with self.assertRaises(AttributeError):
+            self.matcher.cursor_norm = 10  # type: ignore[misc]
+
+        res = self.matcher.match_segment("ان مبادئ كل علم عشره")
+        snap_after = self.matcher.snapshot()
+        self.assertEqual(snap_after.cursor, self.matcher.cursor)
+        self.assertEqual(snap_after.cursor_norm, self.matcher.cursor_norm)
+        self.assertEqual(snap_after.history_length, 1)
+        self.assertEqual(
+            self.matcher.source_window(res.start_pos, res.end_pos),
+            self.sample_source[max(0, res.start_pos - 4) : min(len(self.sample_source), res.end_pos + 4)],
+        )
+
+    def test_contains_and_advance_to_canonical_occurrence_domain_methods(self):
+        filler = " ".join(["كَلِمَةٌ"] * 250)
+        long_source = f"إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ {filler} وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"
+        matcher = SequentialMatnMatcher(long_source, forward_lookahead=50)
+        matcher.match_segment("ان مبادئ كل علم عشره")
+        cursor_before = matcher.cursor
+
+        self.assertTrue(matcher.contains_verbatim("وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"))
+        self.assertFalse(matcher.contains_verbatim("ومن درى الجميع حاز الشرفا"))
+        self.assertTrue(matcher.contains_normalized("ومن درى الجميع حاز الشرفا"))
+        self.assertFalse(matcher.contains_normalized("نص غير موجود اطلاقا"))
+
+        self.assertFalse(matcher.advance_to_canonical_occurrence("ومن درى الجميع حاز الشرفا"))
+        self.assertEqual(matcher.cursor, cursor_before)
+
+        self.assertTrue(matcher.advance_to_canonical_occurrence("وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"))
+        self.assertGreater(matcher.cursor, cursor_before)
+        self.assertEqual(matcher.cursor, len(long_source))
 
 
 if __name__ == "__main__":
