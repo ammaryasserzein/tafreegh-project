@@ -387,6 +387,7 @@ assert recorded == [], f"Unexpected import-time filesystem I/O: {recorded}"
             "_strip_hybrid_summary",
             "read_matn_source_content",
             "create_docx",
+            "export_dual_copies",
         ):
             assert not hasattr(export_docx, attr)
         for attr in (

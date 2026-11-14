@@ -324,6 +324,196 @@ def interleave_matn_segments(
     return '\n\n'.join(new_paragraphs)
 
 
+@dataclass(frozen=True)
+class PreparedTranscript:
+    """Standardized, rounded, and Matn-interleaved transcript ready for delivery."""
+
+    identity: LectureIdentity
+    clean_markdown: str
+    matcher: SequentialMatnMatcher | None = None
+
+
+@dataclass(frozen=True)
+class RenderedDeliverables:
+    """Paths and matcher state produced by emitting OneDrive and baseline outputs."""
+
+    onedrive_file: Path
+    project_file: Path
+    matcher: SequentialMatnMatcher | None = None
+
+
+class PublicationOrchestrator:
+    """Coordinates transcript preparation, dual deliverable emission, and input archiving."""
+
+    def __init__(
+        self,
+        workspace: WorkspaceConfig | None = None,
+        catalog: RuleCatalog | None = None,
+        *,
+        project_root: Path | None = None,
+        onedrive_base: Path | None = None,
+    ) -> None:
+        self.workspace, self.catalog = resolve_runtime_context(
+            workspace=workspace,
+            catalog=catalog,
+            project_root=project_root,
+            onedrive_base=onedrive_base,
+        )
+
+    def prepare_transcript(
+        self,
+        markdown_text: str,
+        original_md_path: Path | None = None,
+        keyword: str | None = None,
+        date: str | None = None,
+        matn_source_path: Path | None = None,
+        identity: LectureIdentity | None = None,
+    ) -> PreparedTranscript:
+        """Strip hybrid summaries, resolve identity, standardize headers, round thousands, and interleave Matn."""
+        stripped_markdown = word_gateway.strip_hybrid_summary(markdown_text)
+        path_ident = (
+            LectureIdentity.from_filename(
+                Path(original_md_path).name,
+                routing_map=self.catalog.routing_map,
+            )
+            if original_md_path
+            else None
+        )
+        cli_override = LectureIdentity(date=date, keyword=keyword) if (date or keyword) else None
+        effective_override = identity.merge(cli_override) if identity else cli_override
+        ident = lecture_identity.resolve_document_identity(
+            stripped_markdown,
+            effective_override,
+            path_identity=path_ident,
+            routing_map=self.catalog.routing_map,
+        )
+
+        clean_md = lecture_identity.apply_transcript_header(stripped_markdown, ident)
+        clean_md = format_thousands(clean_md)
+
+        target_matn_file = matn_source_path or find_matching_matn_source(
+            identity=ident,
+            workspace=self.workspace,
+            catalog=self.catalog,
+        )
+        matcher: SequentialMatnMatcher | None = None
+        if target_matn_file and Path(target_matn_file).exists():
+            matn_content = word_gateway.read_matn_source_content(target_matn_file)
+            matcher = SequentialMatnMatcher(matn_content)
+            clean_md = interleave_matn_segments(clean_md, matcher, catalog=self.catalog)
+
+        return PreparedTranscript(
+            identity=ident,
+            clean_markdown=clean_md,
+            matcher=matcher,
+        )
+
+    def emit_deliverables(
+        self,
+        prepared: PreparedTranscript,
+        *,
+        overwrite: bool = False,
+    ) -> RenderedDeliverables:
+        """Render the OneDrive Word document and AI outputs baseline without mutating input folders."""
+        ident = prepared.identity
+        used_keyword = ident.keyword or ident.subject_name or "عام"
+        onedrive_dir = self.catalog.resolve_onedrive_folder(
+            used_keyword,
+            self.workspace.onedrive_base,
+        )
+        if ident.date:
+            docx_filename = f"{ident.date}.docx"
+        elif ident.resolved_stem:
+            docx_filename = f"{ident.resolved_stem}.docx"
+        else:
+            docx_filename = f"{ident.lecture_number or 'تاريخ_غير_محدد'}.docx"
+
+        onedrive_file = onedrive_dir / docx_filename
+        if onedrive_file.exists() and not overwrite:
+            base_stem = f"{onedrive_file.stem} #AI"
+            onedrive_file = onedrive_file.with_name(f"{base_stem}{onedrive_file.suffix}")
+            counter = 1
+            while onedrive_file.exists():
+                onedrive_file = onedrive_file.with_name(
+                    f"{base_stem} ({counter}){onedrive_file.suffix}"
+                )
+                counter += 1
+
+        word_gateway.create_docx(
+            prepared.clean_markdown,
+            onedrive_file,
+            identity=ident,
+            workspace=self.workspace,
+            catalog=self.catalog,
+        )
+
+        project_dir = self.workspace.ai_outputs_dir
+        project_dir.mkdir(parents=True, exist_ok=True)
+
+        subject_part = ident.subject_name or used_keyword
+        subject_clean = re.sub(r'[\\/*?:"<>|()]', "", subject_part).strip().replace(" ", "_")
+
+        if ident.date:
+            project_file = project_dir / f"{ident.date}_{subject_clean}_AI.md"
+        elif ident.resolved_stem:
+            project_file = project_dir / f"{ident.resolved_stem}_AI.md"
+        else:
+            project_file = project_dir / f"{ident.lecture_number}_{subject_clean}_AI.md"
+
+        ai_md_content = prepared.clean_markdown
+        if prepared.matcher and prepared.matcher.history:
+            summary_report = generate_fallback_summary(prepared.matcher)
+            ai_md_content = f"{prepared.clean_markdown}\n\n{summary_report}\n"
+        project_file.write_text(ai_md_content, encoding="utf-8")
+
+        return RenderedDeliverables(
+            onedrive_file=onedrive_file,
+            project_file=project_file,
+            matcher=prepared.matcher,
+        )
+
+    def archive_inputs(self, identity: LectureIdentity) -> dict:
+        """Archive processed raw inputs and Matn sources and remove chunk folders."""
+        return archive_processed_inputs(
+            identity=identity,
+            workspace=self.workspace,
+            catalog=self.catalog,
+        )
+
+    def publish(
+        self,
+        markdown_text: str,
+        original_md_path: Path | None = None,
+        keyword: str | None = None,
+        date: str | None = None,
+        matn_source_path: Path | None = None,
+        identity: LectureIdentity | None = None,
+        overwrite: bool = False,
+        *,
+        archive: bool = True,
+    ) -> dict:
+        """Run transcript preparation, deliverable emission, and optional atomic archiving."""
+        prepared = self.prepare_transcript(
+            markdown_text,
+            original_md_path=original_md_path,
+            keyword=keyword,
+            date=date,
+            matn_source_path=matn_source_path,
+            identity=identity,
+        )
+        rendered = self.emit_deliverables(prepared, overwrite=overwrite)
+        archived_info = None
+        if archive and rendered.onedrive_file.exists() and rendered.project_file.exists():
+            archived_info = self.archive_inputs(prepared.identity)
+
+        return {
+            "onedrive_file": rendered.onedrive_file,
+            "project_file": rendered.project_file,
+            "archived": archived_info,
+            "matcher": rendered.matcher,
+        }
+
+
 def export_documents(
     markdown_text: str,
     original_md_path: Path | None = None,
@@ -339,120 +529,23 @@ def export_documents(
     catalog: RuleCatalog | None = None,
 ) -> dict:
     """
-    Exports a .docx to OneDrive and saves the AI baseline .md into 03_AI_Outputs.
-    Strips raw NotebookLM source tags and standardizes the 3-line header.
-    Interleaves canonical Matn alignment via SequentialMatnMatcher if available.
-    On confirmed export, atomically archives input files into processed/.
+    Exports transcript deliverables via PublicationOrchestrator and archives inputs.
     """
-    active_workspace, active_catalog = resolve_runtime_context(
+    orchestrator = PublicationOrchestrator(
         workspace=workspace,
         catalog=catalog,
         project_root=project_root,
         onedrive_base=base_onedrive,
     )
-    markdown_text = word_gateway.strip_hybrid_summary(markdown_text)
-    path_ident = (
-        LectureIdentity.from_filename(
-            Path(original_md_path).name,
-            routing_map=active_catalog.routing_map,
-        )
-        if original_md_path
-        else None
-    )
-    cli_override = LectureIdentity(date=date, keyword=keyword) if (date or keyword) else None
-    effective_override = identity.merge(cli_override) if identity else cli_override
-    ident = lecture_identity.resolve_document_identity(
+    return orchestrator.publish(
         markdown_text,
-        effective_override,
-        path_identity=path_ident,
-        routing_map=active_catalog.routing_map,
+        original_md_path=original_md_path,
+        keyword=keyword,
+        date=date,
+        matn_source_path=matn_source_path,
+        identity=identity,
+        overwrite=overwrite,
     )
-
-    clean_md = lecture_identity.apply_transcript_header(markdown_text, ident)
-    clean_md = format_thousands(clean_md)
-
-    # 1. Matn Matching & Interleaving
-    target_matn_file = matn_source_path or find_matching_matn_source(
-        identity=ident,
-        workspace=active_workspace,
-        catalog=active_catalog,
-    )
-    matcher = None
-    if target_matn_file and Path(target_matn_file).exists():
-        matn_content = word_gateway.read_matn_source_content(target_matn_file)
-        matcher = SequentialMatnMatcher(matn_content)
-        clean_md = interleave_matn_segments(clean_md, matcher, catalog=active_catalog)
-
-    # 2. Target OneDrive path (docx)
-    used_keyword = ident.keyword or ident.subject_name or "عام"
-    onedrive_dir = active_catalog.resolve_onedrive_folder(
-        used_keyword,
-        active_workspace.onedrive_base,
-    )
-    if ident.date:
-        docx_filename = f"{ident.date}.docx"
-    elif ident.resolved_stem:
-        docx_filename = f"{ident.resolved_stem}.docx"
-    else:
-        docx_filename = f"{ident.lecture_number or 'تاريخ_غير_محدد'}.docx"
-
-    onedrive_file = onedrive_dir / docx_filename
-
-    if onedrive_file.exists() and not overwrite:
-        base_stem = f"{onedrive_file.stem} #AI"
-        onedrive_file = onedrive_file.with_name(f"{base_stem}{onedrive_file.suffix}")
-        counter = 1
-        while onedrive_file.exists():
-            onedrive_file = onedrive_file.with_name(f"{base_stem} ({counter}){onedrive_file.suffix}")
-            counter += 1
-
-    word_gateway.create_docx(
-        clean_md,
-        onedrive_file,
-        identity=ident,
-        workspace=active_workspace,
-        catalog=active_catalog,
-    )
-
-    # 3. Target Project path (md)
-    project_dir = active_workspace.ai_outputs_dir
-    project_dir.mkdir(parents=True, exist_ok=True)
-
-    subject_part = ident.subject_name or used_keyword
-    subject_clean = re.sub(r'[\\/*?:"<>|()]', "", subject_part).strip().replace(" ", "_")
-
-    if ident.date:
-        project_file = project_dir / f"{ident.date}_{subject_clean}_AI.md"
-    elif ident.resolved_stem:
-        project_file = project_dir / f"{ident.resolved_stem}_AI.md"
-    else:
-        project_file = project_dir / f"{ident.lecture_number}_{subject_clean}_AI.md"
-
-    ai_md_content = clean_md
-    if matcher and matcher.history:
-        summary_report = generate_fallback_summary(matcher)
-        ai_md_content = f"{clean_md}\n\n{summary_report}\n"
-    project_file.write_text(ai_md_content, encoding='utf-8')
-
-    # 4. Atomic archiving
-    archived_info = None
-    if onedrive_file.exists() and project_file.exists():
-        archived_info = archive_processed_inputs(
-            identity=ident,
-            workspace=active_workspace,
-            catalog=active_catalog,
-        )
-
-    return {
-        "onedrive_file": onedrive_file,
-        "project_file": project_file,
-        "archived": archived_info,
-        "matcher": matcher,
-    }
-
-
-# Backwards compatibility alias
-export_dual_copies = export_documents
 
 
 def main(argv: list[str] | None = None) -> int:

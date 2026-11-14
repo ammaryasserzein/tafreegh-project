@@ -12,11 +12,10 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 from tafreegh.export_docx import (
-    _extract_candidate_query,
-    _format_segment_output,
+    PublicationOrchestrator,
     archive_processed_inputs,
     export_documents,
-    export_dual_copies,
+    interleave_matn_segments,
 )
 from tafreegh.word_gateway import create_docx
 from tafreegh.lecture_identity import (
@@ -27,7 +26,7 @@ from tafreegh.lecture_identity import (
     resolve_document_identity,
     standardize_transcript_header,
 )
-from tafreegh.matn_matcher import MatchMode, MatnMatchResult
+from tafreegh.matn_matcher import SequentialMatnMatcher
 from tafreegh.workspace_catalog import RuleCatalog, WorkspaceConfig
 
 class TestResolveOneDriveFolder(unittest.TestCase):
@@ -808,60 +807,107 @@ Source guide
             self.assertEqual(results["project_file"].name, "5-فقه_جديد_5_AI.md")
 
 
-class TestExportDocxHelpers(unittest.TestCase):
-    def test_extract_candidate_query_strips_outer_parentheses(self):
-        self.assertEqual(_extract_candidate_query("(مبادئ كل علم)"), "مبادئ كل علم")
-        self.assertEqual(_extract_candidate_query(" (مبادئ كل علم) "), "مبادئ كل علم")
-        self.assertEqual(_extract_candidate_query("مبادئ كل علم"), "مبادئ كل علم")
-        self.assertEqual(_extract_candidate_query("((متداخل))"), "(متداخل)")
-
-    def test_format_segment_output_primary(self):
-        res = MatnMatchResult(
-            mode=MatchMode.PRIMARY,
-            text="مَبَادِئُ كُلِّ عِلْمٍ",
-            start_pos=0,
-            end_pos=20,
-            is_fallback=False
+class TestPublicationOrchestratorAndInterleaving(unittest.TestCase):
+    def test_interleave_matn_segments_handles_primary_sandwiched_and_isolated_dialect(self):
+        matn_source = (
+            "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ ... "
+            "وَنِسْبَةٌ وَفَضْلُهُ وَالوَاضِعْ"
         )
-        self.assertEqual(_format_segment_output(res, is_standalone=True), ["**(مَبَادِئُ كُلِّ عِلْمٍ)**"])
-        self.assertEqual(_format_segment_output(res, is_standalone=False), "**(مَبَادِئُ كُلِّ عِلْمٍ)**")
-
-    def test_format_segment_output_sandwiched_fallback(self):
-        res = MatnMatchResult(
-            mode=MatchMode.FALLBACK,
-            text="سقط من المتن",
-            start_pos=-1,
-            end_pos=-1,
-            is_fallback=True,
-            is_sandwiched=True
-        )
-        self.assertEqual(
-            _format_segment_output(res, is_standalone=True),
-            ["<!-- fallback -->", "**(سقط من المتن)**"]
-        )
-        self.assertEqual(
-            _format_segment_output(res, is_standalone=False),
-            "<!-- fallback --> **(سقط من المتن)**"
+        matcher = SequentialMatnMatcher(matn_source)
+        catalog = RuleCatalog.load()
+        markdown = (
+            "<!-- fallback -->\n"
+            "**(ده كلام عامي خالص مش كدا؟)**\n\n"
+            "**((ان مبادئ كل علم عشره))**\n\n"
+            "**(سقط من المطبوعة لكنه فصيح)**\n\n"
+            "شرح بين الأبيات فيه **((ونسبه وفضله والواضع))** وفيه **(ده كلام عامي جوه السطر مش كدا؟)**."
         )
 
-    def test_format_segment_output_isolated_dialect_fallback(self):
-        # Dialect segment without sandwiching fails verification -> unbolded
-        res = MatnMatchResult(
-            mode=MatchMode.FALLBACK,
-            text="ده كلام عامي خالص مش كدا؟",
-            start_pos=-1,
-            end_pos=-1,
-            is_fallback=True,
-            is_sandwiched=False
-        )
-        self.assertEqual(
-            _format_segment_output(res, is_standalone=True),
-            ["(ده كلام عامي خالص مش كدا؟)"]
-        )
-        self.assertEqual(
-            _format_segment_output(res, is_standalone=False),
-            "(ده كلام عامي خالص مش كدا؟)"
-        )
+        interleaved = interleave_matn_segments(markdown, matcher, catalog=catalog)
+        # Isolated colloquial fallback fails Conservative Doubt -> unbolded
+        self.assertIn("(ده كلام عامي خالص مش كدا؟)", interleaved)
+        self.assertNotIn("**(ده كلام عامي خالص مش كدا؟)**", interleaved)
+        # Primary matches receive full canonical tashkeel and strip outer extra parens
+        self.assertIn("**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**", interleaved)
+        self.assertIn("**(وَنِسْبَةٌ وَفَضْلُهُ وَالوَاضِعْ)**", interleaved)
+        # Sandwiched classical fallback between two primary matches stays bolded with fallback comment
+        self.assertIn("<!-- fallback -->\n**(سقط من المطبوعة لكنه فصيح)**", interleaved)
+        # Inline colloquial fallback after last primary is unbolded
+        self.assertIn("(ده كلام عامي جوه السطر مش كدا؟)", interleaved)
+        self.assertNotIn("**(ده كلام عامي جوه السطر مش كدا؟)**", interleaved)
+
+    def test_orchestrator_separates_prepare_emit_and_explicit_archive_phases(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            onedrive = Path(tmpdir) / "onedrive"
+            matn_dir = root / "01_Matn_Sources"
+            raw_dir = root / "02_Raw_Inputs"
+            matn_dir.mkdir(parents=True)
+            raw_dir.mkdir(parents=True)
+            (onedrive / "1. رياض الصالحين").mkdir(parents=True)
+
+            matn_file = matn_dir / "2026-10-22__رياض.md"
+            matn_file.write_text("بَابُ الْإِخْلَاصِ", encoding="utf-8")
+            raw_file = raw_dir / "2026-10-22__رياض.md"
+            raw_text = (
+                "2026-10-22 رياض.mp3\nSource guide\n\n"
+                "**(باب الإخلاص)**\n\n"
+                "المبلغ 5000 جنيه، والحمد لله."
+            )
+            raw_file.write_text(raw_text, encoding="utf-8")
+            chunk_dir = raw_dir / "2026-10-22__رياض.md_مقاطع"
+            chunk_dir.mkdir()
+            (chunk_dir / "part1.txt").write_text("chunk", encoding="utf-8")
+
+            ws = WorkspaceConfig.resolve(project_root=root, onedrive_base=onedrive, env={})
+            orchestrator = PublicationOrchestrator(workspace=ws)
+
+            prepared = orchestrator.prepare_transcript(raw_text, original_md_path=raw_file)
+            self.assertIn("بَابُ الْإِخْلَاصِ", prepared.clean_markdown)
+            self.assertIn("5 آلاف", prepared.clean_markdown)
+            self.assertTrue(matn_file.exists())
+            self.assertTrue(raw_file.exists())
+
+            rendered = orchestrator.emit_deliverables(prepared)
+            self.assertTrue(rendered.onedrive_file.exists())
+            self.assertTrue(rendered.project_file.exists())
+            # Emission alone must NOT move or delete input files
+            self.assertTrue(matn_file.exists())
+            self.assertTrue(raw_file.exists())
+            self.assertTrue(chunk_dir.exists())
+
+            # Collision-safe #AI naming without overwrite vs in-place with overwrite=True
+            second = orchestrator.emit_deliverables(prepared, overwrite=False)
+            self.assertEqual(second.onedrive_file.name, "2026-10-22 #AI.docx")
+            replaced = orchestrator.emit_deliverables(prepared, overwrite=True)
+            self.assertEqual(replaced.onedrive_file.name, "2026-10-22.docx")
+
+            # Explicit archive step moves inputs to processed/ and deletes chunks
+            archived = orchestrator.archive_inputs(prepared.identity)
+            self.assertEqual(len(archived["matn_files"]), 1)
+            self.assertEqual(len(archived["raw_files"]), 1)
+            self.assertFalse(matn_file.exists())
+            self.assertFalse(raw_file.exists())
+            self.assertFalse(chunk_dir.exists())
+            self.assertTrue((matn_dir / "processed" / "2026-10-22__رياض.md").exists())
+            self.assertTrue((raw_dir / "processed" / "2026-10-22__رياض.md").exists())
+
+    def test_orchestrator_publish_supports_deferred_archiving_flag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "repo"
+            onedrive = Path(tmpdir) / "onedrive"
+            raw_dir = root / "02_Raw_Inputs"
+            raw_dir.mkdir(parents=True)
+            (onedrive / "المنطق").mkdir(parents=True)
+            raw_file = raw_dir / "2026-10-17__منطق.md"
+            raw_text = "بسم الله الرحمن الرحيم\nالمادة: المنطق (السلم المنورق)\n2026-10-17\n\nالحمد لله."
+            raw_file.write_text(raw_text, encoding="utf-8")
+
+            ws = WorkspaceConfig.resolve(project_root=root, onedrive_base=onedrive, env={})
+            orchestrator = PublicationOrchestrator(workspace=ws)
+            res = orchestrator.publish(raw_text, original_md_path=raw_file, archive=False)
+            self.assertIsNone(res["archived"])
+            self.assertTrue(raw_file.exists())
 
 
 class TestLectureIdentity(unittest.TestCase):
