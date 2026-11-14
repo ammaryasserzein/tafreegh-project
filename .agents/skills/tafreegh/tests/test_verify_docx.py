@@ -1123,6 +1123,41 @@ class TestMatnAlignmentValidator(unittest.TestCase):
 
         self.assertFalse(hasattr(verify_docx_mod, "_verify_exported_matn_segment"))
 
+    def test_verification_gate_and_qa_modules_have_zero_export_docx_dependency(self):
+        import importlib
+        import subprocess
+
+        qa_modules = (
+            "tafreegh.verify_docx",
+            "tafreegh._qa_models",
+            "tafreegh._qa_ooxml",
+            "tafreegh._qa_headers_conclusion",
+            "tafreegh._qa_punctuation",
+            "tafreegh._qa_dialect_dialogue",
+            "tafreegh._qa_fallback_matn",
+            "tafreegh._qa_matn_alignment",
+            "tafreegh._qa_raw_coverage",
+        )
+        for mod_name in qa_modules:
+            importlib.import_module(mod_name)
+
+        scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+        probe = "\n".join(
+            [
+                "import sys",
+                *(f"import {name}" for name in qa_modules),
+                "assert 'tafreegh.export_docx' not in sys.modules",
+            ]
+        )
+        proc = subprocess.run(
+            [sys.executable, "-B", "-c", probe],
+            cwd=str(scripts_dir),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=f"stderr={proc.stderr}")
+
 
 if __name__ == "__main__":
     unittest.main()
