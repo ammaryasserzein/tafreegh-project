@@ -407,6 +407,7 @@ assert recorded == [], f"Unexpected import-time filesystem I/O: {{recorded}}"
             "TRAINING_DATA_DIR",
             "AI_OUTPUTS_DIR",
             "RAW_INPUTS_DIR",
+            "_find_ai_baseline",
         ):
             assert not hasattr(fetch_training_data, attr)
 
