@@ -135,7 +135,7 @@ VALID_SUBDIRECTORIES = {
     "01_Matn_Sources": {"processed"},
     "02_Raw_Inputs": {"processed"},
     "03_AI_Outputs": set(),
-    "04_Training_Data": set(),
+    "04_Training_Data": {"delivered_matched"},
 }
 
 def check_directories(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:

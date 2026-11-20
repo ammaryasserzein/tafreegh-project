@@ -115,6 +115,7 @@ def test_check_directories_allows_processed_subdirectories(tmp_path):
     (tmp_path / "01_Matn_Sources" / "processed").mkdir()
     (tmp_path / "02_Raw_Inputs" / "processed").mkdir()
     (tmp_path / "02_Raw_Inputs" / "2026-09-19 منطق.md_مقاطع").mkdir()
+    (tmp_path / "04_Training_Data" / "delivered_matched").mkdir()
 
     findings = []
     verify_repo.check_directories(findings, base_dir=tmp_path)
