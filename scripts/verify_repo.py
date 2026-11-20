@@ -35,6 +35,7 @@ FORBIDDEN_ROOT_PATTERNS = [
 
 ALLOWED_ROOT_FILES = {
     # Steering & Documentation
+    "AGENTS.md",
     "CODING_STANDARDS.md",
     "CONTEXT.md",
     "GLOSSARY.md",
@@ -94,6 +95,7 @@ NEGATIVE_PHRASING_PATTERNS = [
 
 INLINE_BACKTICK_PATTERN = re.compile(r"`([^`\n]+)`")
 ARABIC_CHAR_PATTERN = re.compile(r"[\u0600-\u06FF]")
+HARDCODED_PATH_PATTERN = re.compile(r"(?:[A-Za-z]:[/\\]|Tafreegh_Project\b)", re.IGNORECASE)
 
 REQUIRED_STANDARDS_SECTIONS = [
     "Scope & Blast Radius",
@@ -105,6 +107,7 @@ class FindingCategory(str, Enum):
     SCRATCH = "SCRATCH"
     PHRASING = "PHRASING"
     BACKTICK = "BACKTICK"
+    PATH = "PATH"
     CONTEXT = "CONTEXT"
     TABLE = "TABLE"
     STANDARDS = "STANDARDS"
@@ -216,6 +219,22 @@ def check_no_arabic_in_backticks(findings: list[Finding], base_dir: Path = REPO_
                         line_number=line_number
                     ))
 
+
+def check_no_hardcoded_skill_paths(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
+    for doc_name in SKILL_DOCS:
+        target_doc = base_dir / doc_name
+        if not target_doc.is_file():
+            continue
+        lines = target_doc.read_text(encoding="utf-8").splitlines()
+        for line_number, line_content in enumerate(lines, 1):
+            if HARDCODED_PATH_PATTERN.search(line_content):
+                findings.append(Finding(
+                    category=FindingCategory.PATH,
+                    message=f"Hardcoded absolute or production worktree path in skill doc: {line_content.strip()[:80]}",
+                    file_path=doc_name,
+                    line_number=line_number
+                ))
+
 def check_context_integrity(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     context_file = base_dir / "CONTEXT.md"
     if not context_file.is_file():
@@ -278,6 +297,7 @@ def run_all_checks(base_dir: Path = REPO_ROOT) -> list[Finding]:
     check_no_root_scratch(findings, base_dir=base_dir)
     check_steering_docs_phrasing(findings, base_dir=base_dir)
     check_no_arabic_in_backticks(findings, base_dir=base_dir)
+    check_no_hardcoded_skill_paths(findings, base_dir=base_dir)
     check_context_integrity(findings, base_dir=base_dir)
     check_coding_standards(findings, base_dir=base_dir)
     return findings

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import verify_repo
@@ -113,6 +114,7 @@ def _scratch_findings(base_dir: Path) -> list[verify_repo.Finding]:
 
 def test_check_no_root_scratch_allows_standard_files(tmp_path):
     for filename in (
+        "AGENTS.md",
         "CODING_STANDARDS.md",
         "CONTEXT.md",
         "GLOSSARY.md",
@@ -231,3 +233,40 @@ def test_glossary_domain_language_purity():
     assert "seam splitting" not in content, "GLOSSARY.md must not contain implementation detail 'seam splitting'"
 
 
+def test_check_no_hardcoded_skill_paths(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "tafreegh"
+    skill_dir.mkdir(parents=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        'Safe: `py .agents/skills/tafreegh/scripts/export_docx.py "<path>"`\n'
+        'Bad Windows: `py "C:\\Users\\L\\Documents\\Tafreegh_Project\\.agents\\skills\\tafreegh\\scripts\\export_docx.py"`\n'
+        'Bad POSIX: `py "C:/Users/L/Documents/Tafreegh_Project/scripts/verify_docx.py"`\n',
+        encoding="utf-8",
+    )
+
+    findings = []
+    verify_repo.check_no_hardcoded_skill_paths(findings, base_dir=tmp_path)
+    assert len(findings) == 2
+    assert all(f.category == verify_repo.FindingCategory.PATH for f in findings)
+    assert [f.line_number for f in findings] == [2, 3]
+
+
+def test_tafreegh_skill_uses_workspace_relative_script_paths():
+    skill_path = REPO_ROOT / ".agents" / "skills" / "tafreegh" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    assert "Tafreegh_Project" not in content
+    assert r"Users\L" not in content
+    assert "Users/L" not in content
+    assert "py .agents/skills/tafreegh/scripts/export_docx.py" in content
+    assert "py .agents/skills/tafreegh/scripts/verify_docx.py" in content
+
+
+def test_pytest_isolates_tafreegh_onedrive_base_to_scratch():
+    from tafreegh.workspace_catalog import WorkspaceConfig
+
+    live_onedrive = Path.home() / "OneDrive" / "1. دوري"
+    cfg = WorkspaceConfig.resolve()
+    assert "TAFREEGH_ONEDRIVE_BASE" in os.environ
+    assert cfg.onedrive_base == Path(os.environ["TAFREEGH_ONEDRIVE_BASE"])
+    assert cfg.onedrive_base != live_onedrive
+    assert cfg.onedrive_base.is_dir()

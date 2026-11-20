@@ -177,17 +177,18 @@ Execute these steps in order to complete a transcription run:
    - End the final lecture paragraph with the canonical Prophetic council expiation du'a and a terminal period (`.`):
      والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
 2. **Automated DOCX Export & Baseline Archival**:
-   - Run `export_docx.py` on the generated Markdown file:
-     `py "C:\Users\L\Documents\Tafreegh_Project\.agents\skills\tafreegh\scripts\export_docx.py" "<path_to_markdown_file>"`
+   - Run `export_docx.py` on the generated Markdown file using the workspace-relative path:
+     `py .agents/skills/tafreegh/scripts/export_docx.py "<path_to_markdown_file>"`
+   - **Staging & Evaluation Delivery-Root Guard (`TAFREEGH_ONEDRIVE_BASE`)**: For staging validation, evaluation, or dry-run exports, set `$env:TAFREEGH_ONEDRIVE_BASE = ".scratch/mock-onedrive"` before invoking `export_docx.py` or `fetch_training_data.py` so `WorkspaceConfig.resolve()` routes all `.docx` reads and writes strictly to the scratch directory while keeping live OneDrive folders untouched.
    - **Completion Criterion**: `export_docx.py` exits with code `0`, writes the `.docx` to the OneDrive course folder, archives `_AI.md` into `03_AI_Outputs/`, and moves raw/matn inputs into `processed/`.
 3. **Post-Export Subagent Verification & Fix Loop**:
    - Immediately after `export_docx.py` completes, dispatch a verification subagent (`invoke_subagent` with `TypeName: "self"`, `Role: "DOCX QA Validator & Fixer"`).
    - **Subagent Steps**:
      1. Run `verify_docx.py` against the exported OneDrive `.docx`, archived raw transcript, and archived `<matn_source>`:
-        `py "C:\Users\L\Documents\Tafreegh_Project\.agents\skills\tafreegh\scripts\verify_docx.py" "<onedrive_docx_path>" --raw "<raw_md_path>" --matn "<matn_md_path>"`
+        `py .agents/skills/tafreegh/scripts/verify_docx.py "<onedrive_docx_path>" --raw "<raw_md_path>" --matn "<matn_md_path>"`
      2. When `verify_docx.py` reports any errors (exit code `1`), fix every reported violation in `03_AI_Outputs/<stem>_AI.md`.
      3. Re-export in place using `--overwrite` to update the target OneDrive `.docx` directly:
-        `py "C:\Users\L\Documents\Tafreegh_Project\.agents\skills\tafreegh\scripts\export_docx.py" --overwrite "<project_ai_md_path>"`
+        `py .agents/skills/tafreegh/scripts/export_docx.py --overwrite "<project_ai_md_path>"`
      4. Re-run `verify_docx.py` and repeat steps 2–3 (up to 3 iterations) until `verify_docx.py` exits with code `0` (`PASSED`, `Errors: 0`). If any issue remains after 3 iterations, halt and return the remaining `ValidationReport` issues to the user.
      5. **Completion Criterion**: `verify_docx.py` exits with code `0` (`=== Tafreegh DOCX Verification Report [PASSED] ===`, `Errors: 0`), and the subagent returns a structured verification report to the main conversation listing: (a) initial issues caught, (b) fixes applied to `_AI.md`, and (c) final `PASSED` report metrics (`Paragraphs`, `Matn`, `Student`, `Errors: 0`).
 4. **Final Agent Response**:
@@ -203,7 +204,7 @@ Execute these steps in order to complete a transcription run:
 ## Section 7: Continuous Learning & Auto-Improvement (Word Diff Loop)
 
 1. **Ingestion & Dataset Archiving**:
-   - Run `fetch_training_data.py` to fetch user-reviewed `.docx` files from OneDrive (تم التسليم), extract plain-text Markdown via `read_docx.py`, and save them into `04_Training_Data/`.
+   - Run `py .agents/skills/tafreegh/scripts/fetch_training_data.py` to fetch user-reviewed `.docx` files from OneDrive (تم التسليم), extract plain-text Markdown via `read_docx.py`, and save them into `04_Training_Data/`.
 2. **Diff Analysis & Classification**:
    - **Matn Classification (`diff_inline_matn.py`)**:
      - `fallback_correction` (**Fallback Correction**): User revisions to segments marked with `<!-- fallback -->`, isolated from copy errors to preserve training signal fidelity.

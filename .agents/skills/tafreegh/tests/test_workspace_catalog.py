@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import warnings
@@ -105,6 +106,37 @@ class TestWorkspaceConfig:
         assert cfg.context_path.is_file()
         assert cfg.dialect_rules_path.name == "dialect-rules.md"
         assert cfg.dialect_rules_path.is_file()
+
+    def test_default_test_runtime_redirects_onedrive_base_away_from_live_onedrive(self):
+        live_onedrive = Path.home() / "OneDrive" / "1. دوري"
+
+        cfg = WorkspaceConfig.resolve()
+
+        assert "TAFREEGH_ONEDRIVE_BASE" in os.environ
+        assert cfg.onedrive_base == Path(os.environ["TAFREEGH_ONEDRIVE_BASE"])
+        assert cfg.onedrive_base != live_onedrive
+        assert cfg.onedrive_base.is_dir()
+
+    def test_tafreegh_onedrive_base_env_redirects_workspace_and_runtime_context(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        from tafreegh.export_docx import PublicationOrchestrator
+        from tafreegh.fetch_training_data import DiffLoopAnalyzer
+
+        scratch_onedrive = tmp_path / "staging_mock_onedrive"
+        live_onedrive = Path.home() / "OneDrive" / "1. دوري"
+        monkeypatch.setenv("TAFREEGH_ONEDRIVE_BASE", str(scratch_onedrive))
+
+        cfg = WorkspaceConfig.resolve()
+        runtime_ws, _ = resolve_runtime_context()
+        orchestrator = PublicationOrchestrator()
+        analyzer = DiffLoopAnalyzer()
+
+        assert cfg.onedrive_base == scratch_onedrive
+        assert runtime_ws.onedrive_base == scratch_onedrive
+        assert orchestrator.workspace.onedrive_base == scratch_onedrive
+        assert analyzer.workspace.onedrive_base == scratch_onedrive
+        assert cfg.onedrive_base != live_onedrive
 
 
 class TestRuleCatalogRouting:
