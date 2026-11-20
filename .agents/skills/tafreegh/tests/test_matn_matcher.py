@@ -340,6 +340,26 @@ class TestMatnMatcher(unittest.TestCase):
         self.assertFalse(matcher_var.advance_to_canonical_occurrence(phrase))
         self.assertEqual(matcher_var.cursor, cursor_var_before)
 
+    def test_match_segment_preserves_closing_delimiters_at_span_end(self):
+        source = (
+            'قَالَ تَعَالَى: (وَلَا تَقُولَنَّ لِشَيْءٍ) ثُمَّ قَالَ: "إِنَّمَا الْأَعْمَالُ بِالنِّيَّاتِ" '
+            "وَذَكَرَ: «مَسْأَلَةً نَافِعَةً»."
+        )
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+
+        res_paren = matcher.match_segment("قال تعالى ولا تقولن لشيء")
+        self.assertEqual(res_paren.mode, MatchMode.PRIMARY)
+        self.assertEqual(res_paren.text, "قَالَ تَعَالَى: (وَلَا تَقُولَنَّ لِشَيْءٍ)")
+        self.assertEqual(source[res_paren.start_pos : res_paren.end_pos], res_paren.text)
+
+        res_quote = matcher.match_segment("ثم قال انما الاعمال بالنيات")
+        self.assertEqual(res_quote.mode, MatchMode.PRIMARY)
+        self.assertEqual(res_quote.text, 'ثُمَّ قَالَ: "إِنَّمَا الْأَعْمَالُ بِالنِّيَّاتِ"')
+
+        res_guillemet = matcher.match_segment("وذكر مسألة نافعة")
+        self.assertEqual(res_guillemet.mode, MatchMode.PRIMARY)
+        self.assertEqual(res_guillemet.text, "وَذَكَرَ: «مَسْأَلَةً نَافِعَةً»")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,7 @@ _LETTER_FOLD_MAP = {**_HAMZA_MAP, "ة": "ه", "ى": "ي"}
 
 _HAMZA_TABLE = str.maketrans(_HAMZA_MAP)
 _LETTER_FOLD_TABLE = str.maketrans(_LETTER_FOLD_MAP)
+_CLOSING_DELIMITERS: dict[str, str] = {")": "(", "}": "{", "]": "[", "»": "«"}
 
 
 @dataclass(frozen=True)
@@ -27,7 +28,7 @@ class IndexedArabicText:
     pos_map: tuple[int, ...]
 
     def extract_span(self, norm_start: int, norm_end: int) -> tuple[int, int, str]:
-        """Map a normalized [norm_start, norm_end) span back to source indices including trailing diacritics."""
+        """Map a normalized [norm_start, norm_end) span back to source indices including trailing diacritics and matching closing delimiters."""
         if norm_start < 0 or norm_end <= norm_start or norm_end > len(self.normalized):
             raise ValueError(
                 f"Invalid normalized span [{norm_start}, {norm_end}) for length {len(self.normalized)}"
@@ -36,6 +37,19 @@ class IndexedArabicText:
         orig_end = self.pos_map[norm_end - 1] + 1
         while orig_end < len(self.source) and has_tashkeel(self.source[orig_end]):
             orig_end += 1
+
+        while orig_end < len(self.source):
+            next_ch = self.source[orig_end]
+            canon_slice = self.source[orig_start:orig_end]
+            opener = _CLOSING_DELIMITERS.get(next_ch)
+            if opener is not None and canon_slice.count(opener) > canon_slice.count(next_ch):
+                orig_end += 1
+                continue
+            if next_ch == '"' and canon_slice.count('"') % 2 != 0:
+                orig_end += 1
+                continue
+            break
+
         return orig_start, orig_end, self.source[orig_start:orig_end]
 
 

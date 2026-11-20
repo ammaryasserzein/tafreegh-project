@@ -297,6 +297,32 @@ class TestVerifyDocxPunctuationAndOrthography(unittest.TestCase):
             # P5 (prose + poetry merged in one bold block) and P6 (inline prose) are invalid
             self.assertEqual([i.paragraph_index for i in el_issues], [5, 6])
 
+    def test_standalone_poetry_allows_longer_classical_meters_up_to_nine_words_and_diff_five(self):
+        md = """بسم الله الرحمن الرحيم
+المادة: ديوان الشافعي
+2026-10-31
+
+**(إِذَا مَا كُنْتَ ذَا قَلْبٍ قَنُوعٍ فَأَنْتَ يَا صَاحِ ... وَمَالِكُ هَذِهِ الدُّنْيَا سَوَاءُ الْحَالِ فِي الدَّارِ)**
+
+دع الأيام تفعل ما تشاء وطب نفسا إذا ... حكم القضاء ولا تجزع لحادثة الليالي في الدجى
+
+**(أَلَا إِنَّمَا الدُّنْيَا ... كَبَيْتٍ نَسَجْتُهُ فِي الْهَوَاءِ مِنْ خُيُوطِ الْعَنْكَبُوتِ الْوَاهِي)**
+
+هذا شرح طويل فيه عشر كلمات كاملة قبل النقاط الثلاث ... ثم شطر ثان فيه خمس كلمات.
+
+كلمة قصيرة ... ولكن الشطر الثاني فيه ثماني كلمات كاملة فقط.
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "long_poetry.docx"
+            create_docx(md, docx_path)
+            report = verify_docx(docx_path)
+            el_issues = [i for i in report.issues if i.code == "ELLIPSIS_FORBIDDEN"]
+            # P3 (9 vs 8 words, diff 1), P4 (8 vs 8 words, diff 0), P5 (3 vs 8 words, diff 5) pass;
+            # P6 (10 vs 5 words, exceeds 9-word ceiling) and P7 (2 vs 8 words, diff 6 exceeds diff 5) fail.
+            self.assertEqual([i.paragraph_index for i in el_issues], [6, 7])
+
     def test_detects_forbidden_punctuation_and_izhan_with_nun(self):
         md = """بسم الله الرحمن الرحيم
 المادة: المنطق (السلم المنورق)

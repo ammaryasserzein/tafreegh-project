@@ -103,3 +103,51 @@ def test_strip_tashkeel_preserving_citations_handles_tatweel_empty_and_unmatched
     assert strip_tashkeel_preserving_citations("مَـتْـنٌ () وَمَا (لَـم) يَـنْـتَـهِ (بِـلَا") == (
         "متن () وما (لَـم) ينته (بلا"
     )
+
+
+@pytest.mark.parametrize(
+    ("source", "query", "expected"),
+    [
+        (
+            "قَالَ تَعَالَى: (قُلْ هُوَ اللَّهُ أَحَدٌ) وَبَعْدَهُ",
+            "قال تعالي قل هو الله احد",
+            "قَالَ تَعَالَى: (قُلْ هُوَ اللَّهُ أَحَدٌ)",
+        ),
+        (
+            'قَالَ النَّبِيُّ: "إِنَّمَا الْأَعْمَالُ بِالنِّيَّاتِ" فَيُعْلَمُ',
+            "قال النبي انما الاعمال بالنيات",
+            'قَالَ النَّبِيُّ: "إِنَّمَا الْأَعْمَالُ بِالنِّيَّاتِ"',
+        ),
+        (
+            "وَقَالَ: «الْحَقُّ أَحَقُّ أَنْ يُتَّبَعَ» ثُمَّ",
+            "وقال الحق احق ان يتبع",
+            "وَقَالَ: «الْحَقُّ أَحَقُّ أَنْ يُتَّبَعَ»",
+        ),
+        (
+            "بَابُ {الْعِلْمُ نُورٌ} وَ [الْعَمَلُ ثَمَرَةٌ] انتهى",
+            "باب العلم نور و العمل ثمره",
+            "بَابُ {الْعِلْمُ نُورٌ} وَ [الْعَمَلُ ثَمَرَةٌ]",
+        ),
+        (
+            'فَائِدَةٌ: ("صَدَقَ اللَّهُ") ثُمَّ',
+            "فائده صدق الله",
+            'فَائِدَةٌ: ("صَدَقَ اللَّهُ")',
+        ),
+        (
+            "قَالَ تَعَالَى: (قُلْ هُوَ اللَّهُ أَحَدٌ) وَبَعْدَهُ",
+            "قل هو الله احد",
+            "قُلْ هُوَ اللَّهُ أَحَدٌ",
+        ),
+    ],
+)
+def test_extract_span_preserves_unbalanced_closing_delimiters_without_overextending(
+    source: str, query: str, expected: str
+):
+    indexed = build_search_index(source)
+    norm_start = indexed.normalized.index(query)
+    norm_end = norm_start + len(query)
+    orig_start, orig_end, extracted = indexed.extract_span(norm_start, norm_end)
+
+    assert extracted == expected
+    assert source[orig_start:orig_end] == expected
+

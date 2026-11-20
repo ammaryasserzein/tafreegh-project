@@ -27,9 +27,9 @@ def _is_standalone_poetry_line(rec: ParagraphRecord) -> bool:
     h1_words = parts[0].strip().split()
     h2_words = parts[1].strip().split()
     return (
-        2 <= len(h1_words) <= 7
-        and 2 <= len(h2_words) <= 7
-        and abs(len(h1_words) - len(h2_words)) <= 3
+        2 <= len(h1_words) <= 9
+        and 2 <= len(h2_words) <= 9
+        and abs(len(h1_words) - len(h2_words)) <= 5
     )
 
 
