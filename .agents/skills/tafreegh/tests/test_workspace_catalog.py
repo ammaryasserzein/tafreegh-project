@@ -228,8 +228,26 @@ class TestRuleCatalogDialectAndAnonymization:
         catalog = RuleCatalog.load()
 
         assert isinstance(catalog.dialect_markers, frozenset)
-        for marker in {"بتوع", "الفلوس", "اتسرق", "اتسرقت", "اتكسر", "اتعمل", "هشتري", "ملوش"}:
+        for marker in {
+            "بتوع",
+            "الفلوس",
+            "اتسرق",
+            "اتسرقت",
+            "اتكسر",
+            "اتعمل",
+            "هشتري",
+            "ملوش",
+            "منيش",
+            "ليه",
+            "كمان",
+            "خليته",
+            "معدي",
+            "عجوزة",
+            "الإيه",
+            "امتى",
+        }:
             assert marker in catalog.dialect_markers
+        assert "واحدة" not in catalog.dialect_markers
 
         assert isinstance(catalog.dialect_replacements, tuple)
         targets = {target for _, target in catalog.dialect_replacements}

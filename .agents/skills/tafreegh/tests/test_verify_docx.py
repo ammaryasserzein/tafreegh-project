@@ -1017,6 +1017,106 @@ button_magic Source guide
             fb_issues = [i for i in report.issues if i.code == "UNBOLDED_FALLBACK_MATN"]
             self.assertEqual(fb_issues, [], f"Expected zero UNBOLDED_FALLBACK_MATN on colloquial anecdote, got: {fb_issues}")
 
+    def test_colloquial_commentary_and_anecdotes_do_not_trigger_unbolded_fallback_matn(self):
+        md = """بسم الله الرحمن الرحيم
+المادة: المنطق (السلم المنورق)
+2026-11-07
+
+هم قالوا شيء من الإيه، من التجربة ومن التقدير.
+
+فمعدي الرازي من أذكى أذكياء التاريخ على واحدة عجوزة، عارفين طبعًا القصة، فلم تبالي به، واحد معدي قالوا: هذا الذي مر بك يعلم ألف دليل ودليل على وجود الله، قالوا: هل وجود الله يحتاج ألف دليل ودليل؟ إن لم يكن عنده ألف شك وشك ما كان عنده ألف دليل ودليل.
+
+قالوا له: أنت وقفت في الصف ليه؟
+
+مش أنت قلت في الأول اعتقاد وخليته من النوع الجازم كمان؟
+
+يعني قلت في كلامي الإجابة ولا ما قلتش الشرح؟
+
+يعني احنا بنقول: الله واحد، هم قالوا: الله ثلاثة مثلًا.
+
+يعني مثلًا وجوب الصلاة ما تفتكرش يعني امتى قالوا لك وجوب الصلاة وكيف حصل اليقين؟ والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "colloquial_commentary.docx"
+            create_docx(md, docx_path)
+            report = verify_docx(docx_path)
+            fb_issues = [i for i in report.issues if i.code == "UNBOLDED_FALLBACK_MATN"]
+            self.assertEqual(
+                fb_issues,
+                [],
+                f"Expected zero UNBOLDED_FALLBACK_MATN on colloquial commentary/anecdotes, got: {fb_issues}",
+            )
+
+    def test_positional_anecdote_suppression_handles_mixed_qala_qalu_order_and_flags_structural_matn(self):
+        # P3: colloquial prefix precedes 'قال:' first, then subsequent 'قالوا:' after '?' — both are anecdote turns.
+        # P4: colloquial prefix precedes 'قالوا:' first, then subsequent 'قال:' after '?' — both are anecdote turns.
+        # P5: colloquial anecdote 'قالوا:' followed by a genuine unbolded structural trigger 'فصل في ...' — MUST still flag as hard Error!
+        md = """بسم الله الرحمن الرحيم
+المادة: المنطق (السلم المنورق)
+2026-11-07
+
+واحد معدي قال: هذا الذي مر بك يعلم ألف دليل ودليل على وجود الله؟ قالوا: هل وجود الله يحتاج ألف دليل ودليل؟
+
+واحد معدي قالوا: هذا الذي مر بك يعلم ألف دليل ودليل على وجود الله؟ قال: هل وجود الله يحتاج ألف دليل ودليل؟
+
+واحد معدي قالوا: هذا الذي مر بك يعلم ألف دليل ودليل على وجود الله؟ فصل في جواز الاشتغال بهذا الفن الشريف، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "positional_anecdote.docx"
+            create_docx(md, docx_path)
+            report = verify_docx(docx_path)
+            fb_issues = [i for i in report.issues if i.code == "UNBOLDED_FALLBACK_MATN"]
+            self.assertEqual([i.paragraph_index for i in fb_issues], [5])
+            self.assertTrue(all(i.severity == Severity.ERROR for i in fb_issues))
+            self.assertFalse(report.passed)
+
+    def test_fallback_matn_loads_colloquial_markers_strictly_from_ssot_and_flags_classical_matn_as_error(self):
+        # P3 uses 'ليه' and P4 uses 'معدي' (both live in references/dialect-rules.md, NOT hardcoded in Python).
+        # P5 and P6 are genuine unbolded Classical Arabic Fallback Matn readings containing 'واحدة', 'الحد', 'الحاجة', 'القوي'.
+        md = """بسم الله الرحمن الرحيم
+المادة: المنطق (السلم المنورق)
+2026-11-07
+
+قالوا له: أنت وقفت في الصف ليه؟
+
+واحد معدي قال: هذا الذي مر بك يعلم ألف دليل ودليل على وجود الله.
+
+قالوا: هذه صفة واحدة ثابتة في ذات الله القوي المتين لا تتعدد.
+
+قال: الحد والموضوع ثم الثمرة والحاجة إلى العلم أشد من الحاجة إلى الطعام، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        minimal_rules_md = """# Minimal Dialect Rules
+
+## Attendee Anonymization (فلان)
+- **Preserved Titles & Kunyas**: أخوكم فلان، أبو فلان، الشيخ فلان.
+- **Preserved Non-Attendee Names**: (زيد).
+
+## Colloquial Lexicon & Verbal Markers
+- **Colloquial Particles & Vocabulary**: **خوياية**.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "ssot_fallback.docx"
+            create_docx(md, docx_path)
+
+            # Default catalog (loaded from references/dialect-rules.md): P3 & P4 suppressed; P5 & P6 MUST fail as hard Errors.
+            default_report = verify_docx(docx_path)
+            default_fb = [i for i in default_report.issues if i.code == "UNBOLDED_FALLBACK_MATN"]
+            self.assertEqual([i.paragraph_index for i in default_fb], [5, 6])
+            self.assertTrue(all(i.severity == Severity.ERROR for i in default_fb))
+            self.assertFalse(default_report.passed)
+
+            # Custom catalog omitting 'ليه' and 'معدي': P3 & P4 MUST now be flagged (proving zero hardcoded Python marker set).
+            custom_rules_path = Path(tmpdir) / "minimal_dialect.md"
+            custom_rules_path.write_text(minimal_rules_md, encoding="utf-8")
+            custom_catalog = RuleCatalog.load(dialect_rules_path=custom_rules_path)
+            custom_report = verify_docx(docx_path, catalog=custom_catalog)
+            custom_fb_paras = {
+                i.paragraph_index
+                for i in custom_report.issues
+                if i.code == "UNBOLDED_FALLBACK_MATN" and i.severity == Severity.ERROR
+            }
+            self.assertEqual(custom_fb_paras, {3, 4, 5, 6})
+
 
 class TestVerifyDocxCLI(unittest.TestCase):
     def test_cli_returns_zero_on_valid_and_nonzero_on_invalid_with_json(self):
