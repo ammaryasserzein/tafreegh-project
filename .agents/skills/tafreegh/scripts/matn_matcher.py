@@ -121,7 +121,19 @@ class SequentialMatnMatcher:
         orig_end = last_char_idx + 1
         while orig_end < len(self.source) and TASHKEEL_REGEX.match(self.source[orig_end]):
             orig_end += 1
-        return orig_start, orig_end, self.source[orig_start:orig_end]
+
+        canon_slice = self.source[orig_start:orig_end]
+        for op, cl in (('(', ')'), ('{', '}'), ('[', ']'), ('«', '»')):
+            if canon_slice.count(op) > canon_slice.count(cl):
+                if orig_end < len(self.source) and self.source[orig_end] == cl:
+                    orig_end += 1
+                    canon_slice = self.source[orig_start:orig_end]
+        if canon_slice.count('"') % 2 != 0:
+            if orig_end < len(self.source) and self.source[orig_end] == '"':
+                orig_end += 1
+                canon_slice = self.source[orig_start:orig_end]
+
+        return orig_start, orig_end, canon_slice
 
     def _record_anchored_match(
         self,

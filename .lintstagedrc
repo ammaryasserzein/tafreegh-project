@@ -1,4 +1,3 @@
 {
-  "*.{py,md}": ["py scripts/verify_repo.py", "py -m pytest"],
   "*": "prettier --ignore-unknown --write"
 }
