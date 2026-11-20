@@ -58,14 +58,14 @@ Execute when `<matn_source>` is provided:
 4. **Interleaving Structure & Matn Re-reading Logic**:
    - **First Appearance**: Isolate standalone Matn on its own line as **(نص المتن المشكول)** separated by a single newline (`\n`) before and after so Word renders each paragraph break cleanly.
    - **Re-reading & Explanation (The "Last Bolded Matn" Rule)**: Compare repeated Matn words against the single most recent **(matn)** block (jumps to earlier blocks reset as First Appearance):
-     - **Inline Citation**: When the repeated words already appeared in the last bolded Matn block, enclose them inline in regular-weight parentheses (الكلمة) inside the explanation paragraph.
+     - **Inline Citation**: When the repeated words already appeared in the last bolded Matn block, enclose them inline in regular-weight parentheses (الكلمة) inside the explanation or طالب: paragraph.
      - **Isolated New Matn**: When the phrase includes Matn words beyond the last bolded Matn block:
        - **≤ 5 Old Words**: Merge old and new words into one standalone bold block **(القديم والجديد)** on a new line.
        - **> 5 Old Words**: Place the old words inline at the end of the current paragraph (الكلمات القديمة), break with a single newline (`\n`), and isolate the new words on the next line as **(الكلمات الجديدة)**. When the Sheikh reads both continuously with zero intervening explanation, merge them into a single standalone block **(القديم والجديد)**.
    - **Large Block Recounts**: When the last bolded Matn block exceeds 2 sentences, isolate the Sheikh's first extracted sub-clause on its own bold line **(الكلمات)** so it becomes the new reference anchor for subsequent inline citations.
    - **Anchor Expiry**: When `>= 500` words (`~2,500` chars / `1+` Word page) of commentary or a mid-lecture break du'a intervene since a Matn clause's last bold appearance, expire that bold anchor: reset clause re-reads that resume or anchor explanation (e.g., after طيب نرجع ثاني: / قال: / فقالوا:) to standalone bold **(نص المتن المشكول)**, while keeping fleeting 1–2 word mid-sentence grammatical callbacks inline as (الكلمة).
    - **Inline Re-read Verses**: Format previously bolded verses or hemistichs re-read inside commentary as regular-weight inline citations (الشطر الأول، الشطر الثاني), joining hemistichs with a single space or an Arabic comma (،).
-   - **Splitting Interrupted Matn/Sharh Clauses**: When the Sheikh interrupts a Matn or Sharh sentence mid-clause with commentary or a correction, split at the interruption: isolate each spoken Matn/Sharh segment on its own bold line **(...)** and place the Sheikh's commentary on regular unbolded paragraphs between them.
+   - **Splitting Interrupted Matn/Sharh Clauses**: When the Sheikh interrupts a Matn or Sharh sentence mid-clause with commentary, a correction, a 1–5 word gloss (فاضت روحه كثيرة يعني.، عن مالك عن نافع.، طبعا اسم موضع: الري.، يعني في الغالب.، طيب.), a spoken prayer (رحم الله الجميع.، رحمه الله.), or an orthographic check (والشح؟ -> طالب: صوت غير مسموع. -> السح؟), split at the exact interruption: isolate each spoken Matn/Sharh segment on its own bold line **(...)** and place the Sheikh's spoken words on regular unbolded paragraphs between them. When the Sheikh reads continuously across consecutive Primary and/or Fallback book clauses, merge them into a single **(...)** block, and place single-utterance transition cues (قال الخطابي:، قال عياض:، قال المازري:، وأشار:، وحديثه هذا:، وثبت:، وذهب آخرون:) once inside the opening of **(...)**.
 
 ### Dynamic Fallback Interleaving (Incomplete Matn Sources)
 
@@ -233,3 +233,4 @@ Execute these steps in order to complete a transcription run:
 - [Golden Fallback Example 1: Prophetic Biography (Ar-Raheeq Al-Makhtoom)](examples/example-fallback-01.md)
 - [Golden Fallback Example 2: Prophetic Hadith (Riyad Al-Salihin)](examples/example-fallback-02.md)
 - [Golden Fallback Example 3: Names of Allah (Al-Asma Al-Husna)](examples/example-fallback-03.md)
+- [Golden Fallback Example 4: Fath al-Bari (Kitab al-Tawheed)](examples/example-fallback-04.md)

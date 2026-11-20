@@ -1,8 +1,12 @@
 # Tafreegh (تفريغ الدروس الشرعية)
 
-Scholarly transcription of Arabic Islamic lectures: processing automated draft transcripts and aligning them with canonical texts to produce Word-ready copy.
+Scholarly transcription and canonical-alignment pipeline for Arabic Islamic lectures in The Curriculum, converting raw automated drafts into publication-ready deliverables.
 
 ## Language
+
+**The Curriculum** (الدوري):
+The 12-course Islamic lecture series delivered by Sheikh Osama, where each course maps to a dedicated canonical text and delivery destination.
+_Avoid_: The program, lecture series, subject list
 
 **Blind Literalism**:
 The core transcription principle: copy matn text exactly as it appears in the canonical source, preserving every diacritic, orthographic mark, and footnote marker without alteration — even if the speaker mispronounces a word.
@@ -71,3 +75,19 @@ _Avoid_: Boundary duplicate, split repetition
 **Compound Sharh-Matn**:
 A single bold block preserving an unvowelized commentator lead-in ending in بقوله، / في قوله، / قوله: flowing directly into a vowelized canonical Matn clause from the primary text.
 _Avoid_: Sharh-to-Matn Continuity, compound blocks, hybrid Sharh-Matn
+
+**Conservative Doubt**:
+The classification boundary requiring unambiguous linguistic or positional evidence before isolating an unmatched Classical Arabic passage as a book reading rather than keeping it inside commentary prose.
+_Avoid_: Aggressive matching, strict doubt, fallback guessing
+
+**Sandwiched Context**:
+Positional evidence where an unmatched Classical Arabic passage is bounded immediately before and after by verified Primary Mode matches from the same lecture's text.
+_Avoid_: Gap context, surrounding matches
+
+**Oral Citation** (متن شفهي عارض):
+A short canonical verse, Hadith, or classical quote spoken from memory outside the lecture's primary text and elevated to standalone Matn during human review.
+_Avoid_: Spoken quote, side citation, unscripted matn
+
+**Diff Loop**:
+The continuous-learning feedback cycle that compares archived AI baselines against human-reviewed deliverables to classify edits, discover dialect or cue rules, and expand golden benchmarks.
+_Avoid_: Training loop, feedback cycle, word diff

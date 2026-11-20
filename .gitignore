@@ -25,3 +25,6 @@ tafreegh-skill/
 03_AI_Outputs/
 04_Training_Data/
 
+# Obsidian vault local workspace config
+.obsidian/
+

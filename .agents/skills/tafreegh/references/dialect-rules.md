@@ -41,8 +41,14 @@ When Egyptian dialect expressions occur in the speaker's explanation, normalize 
 
 ## Colloquial Negation Rules
 
-- **Fused Negation Particles**: Single connected word: **مفيهوش**، **مالهاش**، **ملوش**، **مفيش**، **مكانوش**، **ميقفوش**.
-- **Compound Verb Negation**: Write ما + فعل + ش as separate particles: **ما جتش**، **ما حصلش**، **ما حدش**.
+- **Fused Negation Particles**: Single connected word: **مفيهوش**، **مالهاش**، **ملوش**، **مفيش**، **مكانوش**، **ميقفوش**، **منيش** (e.g., **منيش شايف**).
+- **Compound Verb Negation**: Write ما + فعل + ش as separate particles: **ما جتش**، **ما حصلش**، **ما حدش**، **ما فيهاش**.
+
+## Context-Sensitive Homographs & Bare Spoken Endings
+
+- **معانا ("with us") vs. معنى ("meaning / abstract concept")**: Write **معانا** for the preposition + 1st-person plural pronoun (_with us_: هو معانا حريم هنا) and **معنى** for the noun meaning _abstract concept/meaning_ (ما هو ربنا معنى؟ يعني المحبة).
+- **Temporal أما ("when") vs. Disjunctive وإما ("or / either")**: Retain open-hamza **أما** (or **لما**) for temporal _when_ (هي القدرة أما تكون واحدة) and kasrah-hamza **إما / وإما** for disjunctive _either/or_.
+- **Colloquial Prepositional, Complementizer & Bare Spoken Forms**: Preserve spoken **ليه** (_for him_: هيبقى ليه في البيت), kasrah-hamza **إنه / وإنه** in colloquial clauses (يعني الله من صفاته إنه يحب ... وإنه), and bare spoken endings on predicates and verbal nouns verbatim as uttered in the raw transcript (تحرز أن يقول شمال، والخطأ هنا يكون فاحش).
 
 ## Colloquial Lexicon & Verbal Markers
 
