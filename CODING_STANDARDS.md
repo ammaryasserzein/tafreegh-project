@@ -10,9 +10,9 @@
 
 ## 3. Single Source of Truth
 
-- **Domain vs. Mechanics**: `CONTEXT.md` maintains high-level domain terminology, routing tables, and lean pointers. Operational mechanics belong strictly in designated skill files (e.g. `.agents/skills/tafreegh/SKILL.md`).
+- **Domain vs. Mechanics**: `GLOSSARY.md` maintains pure domain vocabulary, `.agents/skills/tafreegh/references/course-routing.md` maintains the canonical course routing table, and operational mechanics belong strictly in designated skill files (e.g. `.agents/skills/tafreegh/SKILL.md`).
 - **Single Definition**: State flags, options, and heuristics in their authoritative file. Ancillary documents point to that single definition.
-- **Programmatic SSOT**: Import shared Arabic normalization, sequential Matn alignment, identity resolution, header patterns, workspace configuration, rule catalog loading, and Word OOXML styling/rendering/extraction/inspection from `.agents/skills/tafreegh/scripts/tafreegh/arabic_normalizer.py`, `.agents/skills/tafreegh/scripts/tafreegh/matn_matcher.py`, `.agents/skills/tafreegh/scripts/tafreegh/lecture_identity.py`, `.agents/skills/tafreegh/scripts/tafreegh/workspace_catalog.py`, `.agents/skills/tafreegh/scripts/tafreegh/word_gateway.py`, and `.agents/skills/tafreegh/references/dialect-rules.md` across validator, exporter, and diff scripts.
+- **Programmatic SSOT**: Import shared Arabic normalization, sequential Matn alignment, identity resolution, header patterns, workspace configuration, rule catalog loading, and Word OOXML styling/rendering/extraction/inspection from `.agents/skills/tafreegh/scripts/tafreegh/arabic_normalizer.py`, `.agents/skills/tafreegh/scripts/tafreegh/matn_matcher.py`, `.agents/skills/tafreegh/scripts/tafreegh/lecture_identity.py`, `.agents/skills/tafreegh/scripts/tafreegh/workspace_catalog.py`, `.agents/skills/tafreegh/scripts/tafreegh/word_gateway.py`, `.agents/skills/tafreegh/references/course-routing.md`, and `.agents/skills/tafreegh/references/dialect-rules.md` across validator, exporter, and diff scripts.
 
 ## 4. Scratch & Tool Economy
 

@@ -39,7 +39,7 @@
 
 - **Input Pattern Detection**: When the raw transcript begins with a filename or timestamp token (e.g., `YYYY-MM-DD [keyword].mp3`) accompanied by metadata tags (e.g., `Source guide`, `button_magic`, دليل المصدر):
   - **Date & Identity Extraction**: Extract `YYYY-MM-DD` (or the numbered lecture stem) via `lecture_identity.py`.
-  - **Keyword Mapping**: Map the subject keyword to the canonical subject name using the Routing Table in `CONTEXT.md` (§ 3) as the single source of truth.
+  - **Keyword Mapping**: Map the subject keyword to the canonical subject name using [Course Routing Map](course-routing.md) as the single source of truth.
   - **Standard Header Output**:
     ```text
     بسم الله الرحمن الرحيم
@@ -48,7 +48,7 @@
     ```
   - **Body Cleansing**: Completely eliminate the raw filename string and metadata tags (`.mp3`, `Source guide`, `button_magic`, دليل المصدر) from the spoken body, starting transcription cleanly from the Sheikh's opening words.
   - **Automated Dual DOCX Export**:
-    - **User OneDrive File**: Exported `.docx` routed dynamically to the user's OneDrive course folder via `CONTEXT.md` and `lecture_identity.py`.
+    - **User OneDrive File**: Exported `.docx` routed dynamically to the user's OneDrive course folder via [Course Routing Map](course-routing.md) and `lecture_identity.py`.
     - **Project Internal Baseline**: `03_AI_Outputs/[resolved_stem]_AI.md` (archived for repository verification and the continuous Diff Loop).
 
 ## 6. Dialogue & Speaker Attribution (Learned from Approved Lessons)

@@ -1,6 +1,6 @@
 # 0005. Lecture Identity and Dynamic Routing Single Source of Truth
 
-Status: Accepted
+Status: Accepted (Decision § 2 course-routing location superseded by [ADR 0009](0009-retire-context-md-into-glossary-and-course-routing.md))
 
 ## Context
 

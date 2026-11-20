@@ -14,6 +14,9 @@ from .arabic_normalizer import normalize_arabic, normalize_arabic_token, strip_t
 from .lecture_identity import match_canonical_subject
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent.parent
+_COURSE_ROUTING_REL = Path(".agents") / "skills" / "tafreegh" / "references" / "course-routing.md"
+_DIALECT_RULES_REL = Path(".agents") / "skills" / "tafreegh" / "references" / "dialect-rules.md"
+_DEFAULT_COURSE_ROUTING = _SKILL_ROOT / "references" / "course-routing.md"
 _DEFAULT_DIALECT_RULES = _SKILL_ROOT / "references" / "dialect-rules.md"
 
 _BASE_DIALECT_MARKERS: frozenset[str] = frozenset({
@@ -72,8 +75,7 @@ def _discover_repo_root(start_dir: Path | None = None) -> Path:
     candidates.extend(package_anchor.parents)
 
     for directory in candidates:
-        context_file = directory / "CONTEXT.md"
-        if context_file.is_file():
+        if (directory / "GLOSSARY.md").is_file():
             return directory
 
     return _SKILL_ROOT.parent.parent.parent
@@ -119,7 +121,7 @@ class WorkspaceConfig:
     raw_inputs_dir: Path
     ai_outputs_dir: Path
     training_data_dir: Path
-    context_path: Path
+    course_routing_path: Path
     dialect_rules_path: Path
     word_base_template: Path
 
@@ -133,7 +135,7 @@ class WorkspaceConfig:
         raw_inputs_dir: Path | str | None = None,
         ai_outputs_dir: Path | str | None = None,
         training_data_dir: Path | str | None = None,
-        context_path: Path | str | None = None,
+        course_routing_path: Path | str | None = None,
         dialect_rules_path: Path | str | None = None,
         word_base_template: Path | str | None = None,
         env: Mapping[str, str] | None = None,
@@ -170,18 +172,18 @@ class WorkspaceConfig:
             or (resolved_root / "04_Training_Data")
         )
 
-        resolved_context = _resolve_existing_or_fallback(
-            context_path,
+        resolved_course_routing = _resolve_existing_or_fallback(
+            course_routing_path,
             active_env,
-            "TAFREEGH_CONTEXT_PATH",
-            resolved_root / "CONTEXT.md",
-            discovered_root / "CONTEXT.md",
+            "TAFREEGH_COURSE_ROUTING_PATH",
+            resolved_root / _COURSE_ROUTING_REL,
+            _DEFAULT_COURSE_ROUTING,
         )
         resolved_dialect = _resolve_existing_or_fallback(
             dialect_rules_path,
             active_env,
             "TAFREEGH_DIALECT_RULES_PATH",
-            resolved_root / ".agents" / "skills" / "tafreegh" / "references" / "dialect-rules.md",
+            resolved_root / _DIALECT_RULES_REL,
             _DEFAULT_DIALECT_RULES,
         )
         resolved_template = _resolve_existing_or_fallback(
@@ -199,7 +201,7 @@ class WorkspaceConfig:
             raw_inputs_dir=resolved_raw,
             ai_outputs_dir=resolved_ai,
             training_data_dir=resolved_training,
-            context_path=resolved_context,
+            course_routing_path=resolved_course_routing,
             dialect_rules_path=resolved_dialect,
             word_base_template=resolved_template,
         )
@@ -207,7 +209,7 @@ class WorkspaceConfig:
 
 @dataclass(frozen=True)
 class CanonicalCourseEntry:
-    """One row from the CONTEXT.md Section 3 routing table including keyword aliases."""
+    """One row from references/course-routing.md including keyword aliases."""
 
     canonical_subject: str
     primary_keyword: str
@@ -392,17 +394,23 @@ def _expand_course_aliases(tokens: list[str], canonical_name: str) -> tuple[str,
 
 
 def _parse_routing_courses(
-    context_path: Path,
+    course_routing_path: Path,
 ) -> tuple[tuple[CanonicalCourseEntry, ...], Mapping[str, str]]:
-    """Parses CONTEXT.md Section 3 Routing Map into CanonicalCourseEntry rows and routing map."""
-    if not context_path.is_file():
+    """Parses references/course-routing.md into CanonicalCourseEntry rows and routing map."""
+    if not course_routing_path.is_file():
         return (), MappingProxyType({})
 
-    lines = context_path.read_text(encoding="utf-8").splitlines()
-    has_section_3 = any(
-        line.strip().startswith("## 3.") or "توجيه المتون" in line for line in lines
-    )
-    in_section_3 = False
+    lines = course_routing_path.read_text(encoding="utf-8").splitlines()
+
+    def _is_routing_section_heading(stripped_line: str) -> bool:
+        return stripped_line.startswith("## ") and (
+            stripped_line.startswith("## 3.")
+            or "توجيه المتون" in stripped_line
+            or "routing map" in stripped_line.lower()
+        )
+
+    has_routing_section = any(_is_routing_section_heading(line.strip()) for line in lines)
+    in_routing_section = False
     in_table = False
     kw_col_idx = 0
     subj_col_idx = 1
@@ -413,13 +421,13 @@ def _parse_routing_courses(
 
     for line in lines:
         stripped = line.strip()
-        if has_section_3:
-            if stripped.startswith("## 3.") or "توجيه المتون" in stripped:
-                in_section_3 = True
+        if has_routing_section:
+            if _is_routing_section_heading(stripped):
+                in_routing_section = True
                 continue
-            if in_section_3 and stripped.startswith("## "):
+            if in_routing_section and stripped.startswith("## "):
                 break
-            if not in_section_3:
+            if not in_routing_section:
                 continue
 
         if not (stripped.startswith("|") and stripped.endswith("|")):
@@ -663,21 +671,21 @@ class RuleCatalog:
     def load(
         cls,
         *,
-        context_path: Path | str | None = None,
+        course_routing_path: Path | str | None = None,
         dialect_rules_path: Path | str | None = None,
         workspace: WorkspaceConfig | None = None,
     ) -> RuleCatalog:
         """Lazily reads and parses steering documents into an immutable RuleCatalog."""
-        if workspace is None and (context_path is None or dialect_rules_path is None):
+        if workspace is None and (course_routing_path is None or dialect_rules_path is None):
             workspace = WorkspaceConfig.resolve(
-                context_path=context_path,
+                course_routing_path=course_routing_path,
                 dialect_rules_path=dialect_rules_path,
             )
 
-        resolved_context = (
-            Path(context_path)
-            if context_path is not None
-            else workspace.context_path  # type: ignore[union-attr]
+        resolved_routing = (
+            Path(course_routing_path)
+            if course_routing_path is not None
+            else workspace.course_routing_path  # type: ignore[union-attr]
         )
         resolved_dialect = (
             Path(dialect_rules_path)
@@ -685,7 +693,7 @@ class RuleCatalog:
             else workspace.dialect_rules_path  # type: ignore[union-attr]
         )
 
-        courses, routing_map = _parse_routing_courses(resolved_context)
+        courses, routing_map = _parse_routing_courses(resolved_routing)
         canonical_subjects = frozenset(c.canonical_subject for c in courses)
         dialect_markers, dialect_replacements, attendee_rules = _parse_dialect_rules(
             resolved_dialect
@@ -777,7 +785,7 @@ def resolve_runtime_context(
     catalog: RuleCatalog | None = None,
     project_root: Path | str | None = None,
     onedrive_base: Path | str | None = None,
-    context_path: Path | str | None = None,
+    course_routing_path: Path | str | None = None,
     dialect_rules_path: Path | str | None = None,
 ) -> tuple[WorkspaceConfig, RuleCatalog]:
     """Resolves active WorkspaceConfig and RuleCatalog pair without redundant loads."""
@@ -787,7 +795,7 @@ def resolve_runtime_context(
         else WorkspaceConfig.resolve(
             project_root=project_root,
             onedrive_base=onedrive_base,
-            context_path=context_path,
+            course_routing_path=course_routing_path,
             dialect_rules_path=dialect_rules_path,
         )
     )
@@ -795,7 +803,7 @@ def resolve_runtime_context(
         catalog
         if catalog is not None
         else RuleCatalog.load(
-            context_path=context_path,
+            course_routing_path=course_routing_path,
             dialect_rules_path=dialect_rules_path,
             workspace=active_workspace,
         )

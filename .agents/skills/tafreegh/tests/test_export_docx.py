@@ -295,18 +295,18 @@ Source guide
 
 
 class TestCreateDocx(unittest.TestCase):
-    def test_create_docx_uses_workspace_context_path(self):
+    def test_create_docx_uses_workspace_course_routing_path(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
-            context_path = root / "CONTEXT.md"
-            context_path.write_text(
-                "## 3. توجيه المتون (Routing Map)\n\n"
+            routing_path = root / "course-routing.md"
+            routing_path.write_text(
+                "## توجيه المتون (Routing Map)\n\n"
                 "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
                 "| --- | --- | --- |\n"
-                "| `(مخصص)` | **مادة مخصصة للاختبار** | متن |\n",
+                "| (مخصص) | **مادة مخصصة للاختبار** | متن |\n",
                 encoding="utf-8",
             )
-            ws = WorkspaceConfig.resolve(project_root=root, context_path=context_path, env={})
+            ws = WorkspaceConfig.resolve(project_root=root, course_routing_path=routing_path, env={})
             out_file = root / "out.docx"
             create_docx("2026-11-01 مخصص.mp3\n\nالحمد لله رب العالمين.", out_file, workspace=ws)
             doc = docx.Document(str(out_file))
@@ -1187,10 +1187,10 @@ class TestLectureIdentity(unittest.TestCase):
 
 
 class TestCanonicalRoutingSSOT(unittest.TestCase):
-    def test_canonical_routing_loads_from_context_md(self):
+    def test_canonical_routing_loads_from_course_routing_md(self):
         catalog = RuleCatalog.load()
         self.assertGreater(len(catalog.routing_map), 30)
-        # Verify core subjects are mapped dynamically from CONTEXT.md
+        # Verify core subjects are mapped dynamically from references/course-routing.md
         self.assertEqual(catalog.routing_map.get("بيوع"), "فقه البيوع (سعد الخثلان)")
         self.assertEqual(catalog.routing_map.get("خثلان"), "فقه البيوع (سعد الخثلان)")
         self.assertEqual(catalog.routing_map.get("فقه_البيوع"), "فقه البيوع (سعد الخثلان)")
@@ -1202,15 +1202,15 @@ class TestCanonicalRoutingSSOT(unittest.TestCase):
 
     def test_load_canonical_routing_from_custom_table(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            custom_context = Path(tmp_dir) / "CONTEXT.md"
-            custom_context.write_text(
-                "## 3. توجيه المتون (Routing Map)\n\n"
+            custom_routing = Path(tmp_dir) / "course-routing.md"
+            custom_routing.write_text(
+                "## توجيه المتون (Routing Map)\n\n"
                 "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
                 "| --- | --- | --- |\n"
-                "| `(عقيدة)` / `(واسطية)` | **العقيدة الواسطية** | الواسطية لشيخ الإسلام |\n",
+                "| (عقيدة) / (واسطية) | **العقيدة الواسطية** | الواسطية لشيخ الإسلام |\n",
                 encoding="utf-8"
             )
-            catalog = RuleCatalog.load(context_path=custom_context)
+            catalog = RuleCatalog.load(course_routing_path=custom_routing)
             self.assertEqual(catalog.routing_map.get("عقيدة"), "العقيدة الواسطية")
             self.assertEqual(catalog.routing_map.get("واسطية"), "العقيدة الواسطية")
             self.assertEqual(catalog.routing_map.get("العقيدة"), "العقيدة الواسطية")
@@ -1219,15 +1219,15 @@ class TestCanonicalRoutingSSOT(unittest.TestCase):
     def test_load_canonical_routing_with_swapped_columns(self):
         # Table where subject column comes first, keywords second
         with tempfile.TemporaryDirectory() as tmp_dir:
-            custom_context = Path(tmp_dir) / "CONTEXT.md"
-            custom_context.write_text(
-                "## 3. توجيه المتون (Routing Map)\n\n"
+            custom_routing = Path(tmp_dir) / "course-routing.md"
+            custom_routing.write_text(
+                "## توجيه المتون (Routing Map)\n\n"
                 "| المادة المعتمدة | الكلمة الدلالية |\n"
                 "| --- | --- |\n"
-                "| **أصول الفقه** | `(أصول)` / `(ورقات)` |\n",
+                "| **أصول الفقه** | (أصول) / (ورقات) |\n",
                 encoding="utf-8"
             )
-            catalog = RuleCatalog.load(context_path=custom_context)
+            catalog = RuleCatalog.load(course_routing_path=custom_routing)
             self.assertEqual(catalog.routing_map.get("أصول"), "أصول الفقه")
             self.assertEqual(catalog.routing_map.get("ورقات"), "أصول الفقه")
             self.assertEqual(catalog.routing_map.get("أصول الفقه"), "أصول الفقه")
@@ -1243,12 +1243,12 @@ class TestCanonicalRoutingSSOT(unittest.TestCase):
                 "الْحَمْدُ لِلَّهِ الَّذِي أَرْسَلَ رَسُولَهُ",
                 encoding="utf-8",
             )
-            custom_context = root / "CONTEXT.md"
-            custom_context.write_text(
-                "## 3. توجيه المتون (Routing Map)\n\n"
+            custom_routing = root / "course-routing.md"
+            custom_routing.write_text(
+                "## توجيه المتون (Routing Map)\n\n"
                 "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
                 "| --- | --- | --- |\n"
-                "| `(عقيدة)` / `(واسطية)` | **العقيدة الواسطية** | الواسطية |\n",
+                "| (عقيدة) / (واسطية) | **العقيدة الواسطية** | الواسطية |\n",
                 encoding="utf-8",
             )
             custom_dialect = root / "dialect-rules.md"
@@ -1262,7 +1262,7 @@ class TestCanonicalRoutingSSOT(unittest.TestCase):
             ws = WorkspaceConfig.resolve(
                 project_root=root,
                 onedrive_base=onedrive,
-                context_path=custom_context,
+                course_routing_path=custom_routing,
                 dialect_rules_path=custom_dialect,
                 env={},
             )

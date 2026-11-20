@@ -24,14 +24,14 @@ class TestWorkspaceConfig:
     def test_explicit_parameters_override_env_and_discovery(self, tmp_path: Path):
         explicit_root = tmp_path / "explicit_repo"
         explicit_od = tmp_path / "explicit_onedrive"
-        explicit_ctx = tmp_path / "custom_CONTEXT.md"
+        explicit_routing = tmp_path / "custom_course-routing.md"
         explicit_dialect = tmp_path / "custom_dialect.md"
         explicit_template = tmp_path / "custom_Word_base.docx"
 
         env = {
             "TAFREEGH_PROJECT_ROOT": str(tmp_path / "env_repo"),
             "TAFREEGH_ONEDRIVE_BASE": str(tmp_path / "env_onedrive"),
-            "TAFREEGH_CONTEXT_PATH": str(tmp_path / "env_CONTEXT.md"),
+            "TAFREEGH_COURSE_ROUTING_PATH": str(tmp_path / "env_course-routing.md"),
             "TAFREEGH_DIALECT_RULES_PATH": str(tmp_path / "env_dialect.md"),
             "TAFREEGH_WORD_BASE_TEMPLATE": str(tmp_path / "env_Word_base.docx"),
         }
@@ -39,7 +39,7 @@ class TestWorkspaceConfig:
         cfg = WorkspaceConfig.resolve(
             project_root=explicit_root,
             onedrive_base=explicit_od,
-            context_path=explicit_ctx,
+            course_routing_path=explicit_routing,
             dialect_rules_path=explicit_dialect,
             word_base_template=explicit_template,
             env=env,
@@ -51,7 +51,7 @@ class TestWorkspaceConfig:
         assert cfg.raw_inputs_dir == explicit_root / "02_Raw_Inputs"
         assert cfg.ai_outputs_dir == explicit_root / "03_AI_Outputs"
         assert cfg.training_data_dir == explicit_root / "04_Training_Data"
-        assert cfg.context_path == explicit_ctx
+        assert cfg.course_routing_path == explicit_routing
         assert cfg.dialect_rules_path == explicit_dialect
         assert cfg.word_base_template == explicit_template
 
@@ -83,12 +83,15 @@ class TestWorkspaceConfig:
         repo = tmp_path / "workspace"
         nested = repo / "02_Raw_Inputs" / "nested"
         nested.mkdir(parents=True)
-        (repo / "CONTEXT.md").write_text("# context\n", encoding="utf-8")
+        (repo / "GLOSSARY.md").write_text("# Tafreegh\n", encoding="utf-8")
+        local_routing = repo / ".agents" / "skills" / "tafreegh" / "references" / "course-routing.md"
+        local_routing.parent.mkdir(parents=True)
+        local_routing.write_text("# Course Routing Map\n", encoding="utf-8")
 
         cfg = WorkspaceConfig.resolve(env={}, cwd=nested)
 
         assert cfg.project_root == repo
-        assert cfg.context_path == repo / "CONTEXT.md"
+        assert cfg.course_routing_path == local_routing
         assert cfg.onedrive_base == Path.home() / "OneDrive" / "1. دوري"
         assert cfg.dialect_rules_path.name == "dialect-rules.md"
         assert cfg.dialect_rules_path.is_file()
@@ -102,8 +105,8 @@ class TestWorkspaceConfig:
         cfg = WorkspaceConfig.resolve(project_root=minimal_root, env={})
 
         assert cfg.project_root == minimal_root
-        assert cfg.context_path.name == "CONTEXT.md"
-        assert cfg.context_path.is_file()
+        assert cfg.course_routing_path.name == "course-routing.md"
+        assert cfg.course_routing_path.is_file()
         assert cfg.dialect_rules_path.name == "dialect-rules.md"
         assert cfg.dialect_rules_path.is_file()
 
@@ -140,7 +143,7 @@ class TestWorkspaceConfig:
 
 
 class TestRuleCatalogRouting:
-    def test_loads_canonical_course_entries_and_immutable_routing_map_from_context(self):
+    def test_loads_canonical_course_entries_and_immutable_routing_map_from_course_routing(self):
         catalog = RuleCatalog.load()
 
         assert len(catalog.courses) == 12
@@ -170,24 +173,25 @@ class TestRuleCatalogRouting:
         with pytest.raises(FrozenInstanceError):
             catalog.courses = ()  # type: ignore[misc]
 
-    def test_loads_custom_and_swapped_routing_tables_and_handles_missing_context(
+    def test_loads_custom_and_swapped_routing_tables_and_handles_missing_routing_file(
         self, tmp_path: Path
     ):
-        custom_ctx = tmp_path / "CONTEXT.md"
-        custom_ctx.write_text(
-            "## 3. توجيه المتون (Routing Map)\n\n"
+        custom_routing = tmp_path / "course-routing.md"
+        custom_routing.write_text(
+            "# Course Routing Map (توجيه المتون)\n\n"
+            "## توجيه المتون (Routing Map)\n\n"
             "| المادة المعتمدة | الكلمة الدلالية |\n"
             "| --- | --- |\n"
-            "| **أصول الفقه** | `(أصول)` / `(ورقات)` |\n",
+            "| **أصول الفقه** | (أصول) / (ورقات) |\n",
             encoding="utf-8",
         )
-        custom_catalog = RuleCatalog.load(context_path=custom_ctx)
+        custom_catalog = RuleCatalog.load(course_routing_path=custom_routing)
         assert custom_catalog.routing_map["أصول"] == "أصول الفقه"
         assert custom_catalog.routing_map["ورقات"] == "أصول الفقه"
         assert custom_catalog.routing_map["الورقات"] == "أصول الفقه"
         assert custom_catalog.routing_map["أصول الفقه"] == "أصول الفقه"
 
-        missing_catalog = RuleCatalog.load(context_path=tmp_path / "missing_CONTEXT.md")
+        missing_catalog = RuleCatalog.load(course_routing_path=tmp_path / "missing_course-routing.md")
         assert missing_catalog.courses == ()
         assert dict(missing_catalog.routing_map) == {}
         assert missing_catalog.canonical_subjects == frozenset()
@@ -496,12 +500,12 @@ assert "tafreegh.workspace_catalog" not in sys.modules
         assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
 
     def test_resolve_runtime_context_uses_workspace_and_catalog(self, tmp_path: Path):
-        ctx = tmp_path / "CONTEXT.md"
-        ctx.write_text(
-            "## 3. توجيه المتون (Routing Map)\n\n"
+        routing_md = tmp_path / "course-routing.md"
+        routing_md.write_text(
+            "## توجيه المتون (Routing Map)\n\n"
             "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
             "| --- | --- | --- |\n"
-            "| `(مخصص)` | **مادة مخصصة** | متن |\n",
+            "| (مخصص) | **مادة مخصصة** | متن |\n",
             encoding="utf-8",
         )
         rules_md = tmp_path / "dialect-rules.md"
@@ -515,7 +519,7 @@ assert "tafreegh.workspace_catalog" not in sys.modules
         )
         ws = WorkspaceConfig.resolve(
             project_root=tmp_path,
-            context_path=ctx,
+            course_routing_path=routing_md,
             dialect_rules_path=rules_md,
             env={},
         )

@@ -17,7 +17,7 @@
 
 - **Deep Modules**: Encapsulate complex behavior behind small interfaces at clean seams.
 - **Red Loop**: Establish a tight feedback loop (failing test or command) before theorizing or fixing bugs.
-- **Stateful**: Use `CONTEXT.md` for domain vocabulary, and `docs/adr/` for architecture decision records.
+- **Stateful**: Use `GLOSSARY.md` for domain vocabulary, and `docs/adr/` for architecture decision records.
 - **Grilling**: Relentlessly interview to clarify ambiguous requirements before writing production code.
 - **Prototyping**: Settle hard design questions by building throwaway prototypes.
 - **Hygiene**: Respect phase boundaries. Recommend `/compact` or `/clear` when shifting from design to implementation to preserve the smart zone.

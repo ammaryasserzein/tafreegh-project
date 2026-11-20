@@ -770,12 +770,12 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
     def test_verify_docx_uses_injected_workspace_and_custom_catalog(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            context_path = root / "CONTEXT.md"
-            context_path.write_text(
-                "## 3. توجيه المتون (Routing Map)\n\n"
+            routing_path = root / "course-routing.md"
+            routing_path.write_text(
+                "## توجيه المتون (Routing Map)\n\n"
                 "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
                 "| --- | --- | --- |\n"
-                "| `(مخصص)` | **مادة مخصصة للاختبار** | متن مخصص |\n",
+                "| (مخصص) | **مادة مخصصة للاختبار** | متن مخصص |\n",
                 encoding="utf-8",
             )
             rules_path = root / "dialect-rules.md"
@@ -790,7 +790,7 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
             )
             ws = WorkspaceConfig.resolve(
                 project_root=root,
-                context_path=context_path,
+                course_routing_path=routing_path,
                 dialect_rules_path=rules_path,
                 env={},
             )
@@ -808,8 +808,12 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
             docx_path = root / "custom_verify.docx"
             create_docx(doc_md, docx_path, workspace=ws, catalog=custom_catalog)
 
-            default_codes = [i.code for i in verify_docx(docx_path).issues]
+            default_rep = verify_docx(docx_path)
+            default_codes = [i.code for i in default_rep.issues]
             self.assertIn("HEADER_P1_SUBJECT_INVALID", default_codes)
+            p1_issue = next(i for i in default_rep.issues if i.code == "HEADER_P1_SUBJECT_INVALID")
+            self.assertIn("course-routing.md", p1_issue.message)
+            self.assertNotIn("CONTEXT.md", p1_issue.message)
             self.assertIn("UNBOLDED_FALLBACK_MATN", default_codes)
             self.assertNotIn("ATTENDEE_NAME_UNANONYMIZED", default_codes)
 
@@ -818,6 +822,20 @@ class TestVerifyDocxDialectAndDialogue(unittest.TestCase):
             self.assertNotIn("HEADER_P1_SUBJECT_INVALID", ws_codes)
             self.assertNotIn("UNBOLDED_FALLBACK_MATN", ws_codes)
             self.assertIn("ATTENDEE_NAME_UNANONYMIZED", ws_codes)
+
+            # Verify both --routing and backwards-compatible --context CLI flags load custom routing
+            clean_md = """بسم الله الرحمن الرحيم
+المادة: مادة مخصصة للاختبار
+2026-11-01
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+            clean_docx = root / "clean_custom.docx"
+            create_docx(clean_md, clean_docx, workspace=ws, catalog=custom_catalog)
+            from tafreegh.verify_docx import main as verify_main
+
+            self.assertEqual(verify_main([str(clean_docx), "--routing", str(routing_path)]), 0)
+            self.assertEqual(verify_main([str(clean_docx), "--context", str(routing_path)]), 0)
 
             rep_cat = verify_docx(docx_path, catalog=custom_catalog)
             self.assertEqual(ws_codes, [i.code for i in rep_cat.issues])

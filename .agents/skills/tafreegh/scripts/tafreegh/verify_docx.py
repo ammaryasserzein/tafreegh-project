@@ -43,7 +43,7 @@ def verify_docx(
     docx_path: Path | str,
     raw_path: Path | str | None = None,
     matn_path: Path | str | None = None,
-    context_path: Path | str | None = None,
+    course_routing_path: Path | str | None = None,
     dialect_rules_path: Path | str | None = None,
     *,
     workspace: WorkspaceConfig | None = None,
@@ -57,7 +57,7 @@ def verify_docx(
     _, active_catalog = resolve_runtime_context(
         workspace=workspace,
         catalog=catalog,
-        context_path=context_path,
+        course_routing_path=course_routing_path,
         dialect_rules_path=dialect_rules_path,
     )
 
@@ -110,7 +110,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("docx_path", type=Path, help="Path to the .docx file to verify.")
     parser.add_argument("--raw", type=Path, default=None, help="Optional path to raw transcript .md for coverage check.")
     parser.add_argument("--matn", type=Path, default=None, help="Optional path to canonical matn .md.")
-    parser.add_argument("--context", type=Path, default=None, help="Optional path to CONTEXT.md.")
+    parser.add_argument(
+        "--routing",
+        "--context",
+        dest="course_routing",
+        type=Path,
+        default=None,
+        help="Optional path to course-routing.md.",
+    )
     parser.add_argument("--json", action="store_true", help="Output report as JSON.")
 
     args = parser.parse_args(argv)
@@ -123,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
             docx_path=args.docx_path,
             raw_path=args.raw,
             matn_path=args.matn,
-            context_path=args.context,
+            course_routing_path=args.course_routing,
         )
     except DocxArchiveError as exc:
         print(f"Error: {exc}", file=sys.stderr)

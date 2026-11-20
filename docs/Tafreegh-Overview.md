@@ -14,10 +14,10 @@ created: 2026-11-11
 updated: 2026-11-12
 repository: C:\Users\L\Documents\Tafreegh_Project
 related:
-  - "[[CONTEXT]]"
   - "[[GLOSSARY]]"
   - "[[CODING_STANDARDS]]"
   - "[[tafreegh-skill/SKILL|SKILL]]"
+  - "[[tafreegh-skill/references/course-routing|course-routing]]"
 ---
 
 # Tafreegh Project Overview (مشروع تفريغ وتحقيق الدروس الشرعية)
@@ -56,14 +56,14 @@ flowchart TD
 
 ## 2. 4-Folder Data Architecture
 
-Defined in [[CONTEXT]] and enforced by `scripts/verify_repo.py`:
+Defined in [[tafreegh-skill/SKILL|SKILL]] and enforced by `scripts/verify_repo.py`:
 
-| Folder             | Role                                                                                      | Archiving & Lifecycle                                                      | Key Subfolders                    |
-| :----------------- | :---------------------------------------------------------------------------------------- | :------------------------------------------------------------------------- | :-------------------------------- |
-| `01_Matn_Sources`  | Per-lecture canonical vowelized Markdown texts (**Matn Source**) for **Blind Literalism** | Consumed sources archive atomically on verified export                     | `processed/`                      |
-| `02_Raw_Inputs`    | Unedited raw speech drafts extracted from **Gemini Notebook**                             | Long files split temporarily via `chunk_transcript.py`; archived on export | `processed/`, temporary `_مقاطع/` |
-| `03_AI_Outputs`    | Flat internal archive of `_AI.md` baselines and `.docx` exports for the **Diff Loop**     | Permanent baseline archive (never moved to `processed/`)                   | —                                 |
-| `04_Training_Data` | Human-reviewed ground-truth `.md` transcripts extracted from OneDrive `(تم التسليم)`      | Populated by `fetch_training_data.py` + `read_docx.py`                     | —                                 |
+| Folder             | Role                                                                                           | Archiving & Lifecycle                                                      | Key Subfolders                    |
+| :----------------- | :--------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------- | :-------------------------------- |
+| `01_Matn_Sources`  | Per-lecture canonical vowelized Markdown texts (**Matn Source**) for **Blind Literalism**      | Consumed sources archive atomically on verified export                     | `processed/`                      |
+| `02_Raw_Inputs`    | Unedited raw speech drafts extracted from **Gemini Notebook**                                  | Long files split temporarily via `chunk_transcript.py`; archived on export | `processed/`, temporary `_مقاطع/` |
+| `03_AI_Outputs`    | Flat internal archive of `_AI.md` baselines for the **Diff Loop** (`.docx` routes to OneDrive) | Permanent baseline archive (never moved to `processed/`)                   | —                                 |
+| `04_Training_Data` | Human-reviewed ground-truth `.md` transcripts extracted from OneDrive `(تم التسليم)`           | Populated by `fetch_training_data.py` + `read_docx.py`                     | —                                 |
 
 > [!info] OneDrive Delivery & Workspace Junctions
 >
@@ -98,9 +98,9 @@ Operational rules live in [[tafreegh-skill/SKILL|SKILL]], with domain vocabulary
 
 ---
 
-## 4. Dynamic Course Routing Map (12 Canonical Courses)
+## 4. Dynamic Course Routing Map
 
-Parsed dynamically at runtime from [[CONTEXT]] § 3 via `lecture_identity.py` (`LectureIdentity` supports both `YYYY-MM-DD` date stems and mirrored `[N]-[subject]_[N]` **Numbered Lecture Stems**):
+Parsed dynamically at runtime from [[tafreegh-skill/references/course-routing|course-routing]] via `workspace_catalog.py` and `lecture_identity.py` (`LectureIdentity` supports both `YYYY-MM-DD` date stems and mirrored `[N]-[subject]_[N]` **Numbered Lecture Stems**):
 
 | Routing Keywords                | Canonical Course Name         | Source Text                                |
 | :------------------------------ | :---------------------------- | :----------------------------------------- |
@@ -123,18 +123,18 @@ Parsed dynamically at runtime from [[CONTEXT]] § 3 via `lecture_identity.py` (`
 
 ### Pipeline Scripts (`tafreegh-skill/scripts/` & `scripts/`)
 
-| Script                   | Responsibility                                                                                                                                                 |
-| :----------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lecture_identity.py`    | `LectureIdentity` entity, dynamic routing parser from [[CONTEXT]], stem normalization, and cross-folder matching                                               |
-| `matn_matcher.py`        | **Sequential Cursor**, forward/look-behind matching, dynamic fallback interleaving, and compound Sharh-Matn seam handling                                      |
-| `chunk_transcript.py`    | Splits long transcripts into ~`1,300`-word chunks (`1,000`–`1,600`) along natural Arabic sentence boundaries (mirrored at `scripts/chunk_transcript.py`)       |
-| `export_docx.py`         | Compiles Markdown into `Word base.docx` `.docx`, strips **Markdown Leakage**/summaries, archives `_AI.md`, moves inputs to `processed/`                        |
-| `verify_docx.py`         | Post-export QA validator checking formatting, RTL XML, dialect compliance, attendee leaks, and Matn fidelity against raw/source inputs                         |
-| `fetch_training_data.py` | Scans OneDrive `(تم التسليم)` for edited `.docx`, extracts Markdown via `read_docx.py`, saves to `04_Training_Data/`, runs cue/diff analysis                   |
-| `read_docx.py`           | Reads `.docx` XML (`word/document.xml`), preserving bold Matn markers while normalizing extracted text                                                         |
-| `diff_inline_matn.py`    | Classifies Matn diffs into `fallback_correction` (**Fallback Correction**), `oral_citation` (**Oral Citation**), `matn_copy_error`, and `anchor_expiry_reread` |
-| `diff_cues.py`           | Proposes new **Known Cue** candidates from user-inserted `طالب: صوت غير مسموع.` lines while filtering **Rhetorical Suffixes**                                  |
-| `scripts/verify_repo.py` | Repository guardrail validating folders, root whitelist, `.scratch/` containment, table syntax, positive steering phrasing, and ADR 0003 rules                 |
+| Script                                         | Responsibility                                                                                                                                                 |
+| :--------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace_catalog.py` & `lecture_identity.py` | `WorkspaceConfig`, `RuleCatalog` dynamic routing parser from [[tafreegh-skill/references/course-routing                                                        | course-routing]], `LectureIdentity` entity, stem normalization, and cross-folder matching |
+| `matn_matcher.py`                              | **Sequential Cursor**, forward/look-behind matching, dynamic fallback interleaving, and compound Sharh-Matn seam handling                                      |
+| `chunk_transcript.py`                          | Splits long transcripts into ~`1,300`-word chunks (`1,000`–`1,600`) along natural Arabic sentence boundaries (mirrored at `scripts/chunk_transcript.py`)       |
+| `export_docx.py`                               | Compiles Markdown into `Word base.docx` `.docx`, strips **Markdown Leakage**/summaries, archives `_AI.md`, moves inputs to `processed/`                        |
+| `verify_docx.py`                               | Post-export QA validator checking formatting, RTL XML, dialect compliance, attendee leaks, and Matn fidelity against raw/source inputs                         |
+| `fetch_training_data.py`                       | Scans OneDrive `(تم التسليم)` for edited `.docx`, extracts Markdown via `read_docx.py`, saves to `04_Training_Data/`, runs cue/diff analysis                   |
+| `read_docx.py`                                 | Reads `.docx` XML (`word/document.xml`), preserving bold Matn markers while normalizing extracted text                                                         |
+| `diff_inline_matn.py`                          | Classifies Matn diffs into `fallback_correction` (**Fallback Correction**), `oral_citation` (**Oral Citation**), `matn_copy_error`, and `anchor_expiry_reread` |
+| `diff_cues.py`                                 | Proposes new **Known Cue** candidates from user-inserted `طالب: صوت غير مسموع.` lines while filtering **Rhetorical Suffixes**                                  |
+| `scripts/verify_repo.py`                       | Repository guardrail validating folders, root whitelist, `.scratch/` containment, table syntax, positive steering phrasing, and ADR 0003 rules                 |
 
 ### Architecture Decision Records (`docs/adr/`)
 
@@ -142,10 +142,11 @@ Parsed dynamically at runtime from [[CONTEXT]] § 3 via `lecture_identity.py` (`
 - [[0002-atomic-archiving-and-hybrid-matn]] — Atomic input archiving (`processed/`) & **Dynamic Fallback Interleaving**
 - [[0003-markdown-leakage-sanitization]] — Defense-in-depth sanitization against **Markdown Leakage**
 - [[0004-numbered-lecture-routing-and-stem-matching]] — **Numbered Lecture Stem** routing (`[N]-[subject]_[N]`)
-- [[0005-lecture-identity-and-dynamic-routing-ssot]] — `LectureIdentity` domain entity, dynamic [[CONTEXT]] routing SSOT, and single-gap Matn paragraphs
+- [[0005-lecture-identity-and-dynamic-routing-ssot]] — `LectureIdentity` domain entity, dynamic course-routing SSOT (routing location superseded by ADR 0009), and single-gap Matn paragraphs
 - [[0006-rhetorical-suffix-cue-suppression]] — Suppressing **Rhetorical Suffix** (`ها؟` / `إيه؟`) false-positive cue nominations
 - [[0007-intra-citation-ayah-asterisks]] — Allowing spaced `*` inside multi-ayah Quranic citations `(آية * آية)`
 - [[0008-compound-sharh-matn-alignment]] — Preserving continuous **Compound Sharh-Matn** blocks across commentator transitions
+- [[0009-retire-context-md-into-glossary-and-course-routing]] — Retiring legacy context document into pure-domain [[GLOSSARY]], [[tafreegh-skill/references/course-routing|course-routing]], and `SKILL.md` § 1
 
 > [!note] Governance & Testing
 >

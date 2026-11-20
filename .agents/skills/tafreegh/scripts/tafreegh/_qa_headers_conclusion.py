@@ -95,7 +95,7 @@ def _check_header_triple(
             report.flag(
                 "HEADER_P1_SUBJECT_INVALID",
                 1,
-                f"Header P1 subject '{subj_val}' is not a canonical subject from CONTEXT.md.",
+                f"Header P1 subject '{subj_val}' is not a canonical subject from course-routing.md.",
                 p1_text[:60],
             )
 

@@ -20,31 +20,54 @@ def test_finding_dataclass_formatting_with_line_number():
 
 def test_finding_dataclass_formatting_without_line_number():
     finding = verify_repo.Finding(
-        category=verify_repo.FindingCategory.CONTEXT,
+        category=verify_repo.FindingCategory.ROUTING,
         message="Invalid folder",
-        file_path="CONTEXT.md",
+        file_path=verify_repo.COURSE_ROUTING_DOC,
         line_number=0
     )
-    assert str(finding) == "[CONTEXT] CONTEXT.md Invalid folder"
+    assert str(finding) == f"[ROUTING] {verify_repo.COURSE_ROUTING_DOC} Invalid folder"
     assert ":0" not in str(finding)
 
 def test_escaped_pipe_table_parsing(tmp_path):
     table_content = (
-        "# Test Table\n\n"
-        "| Header 1 | Header 2 |\n"
-        "| --- | --- |\n"
-        "| Text with \\| escaped pipe | Second column |\n"
+        "# Course Routing Map\n\n"
+        "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
+        "| --- | --- | --- |\n"
+        "| (اختبار) | **مادة** | كتاب \\| مؤلف |\n"
     )
-    context_file = tmp_path / "CONTEXT.md"
-    context_file.write_text(table_content, encoding="utf-8")
+    routing_file = tmp_path / verify_repo.COURSE_ROUTING_DOC
+    routing_file.parent.mkdir(parents=True)
+    routing_file.write_text(table_content, encoding="utf-8")
 
     findings = []
-    verify_repo.check_context_integrity(findings, base_dir=tmp_path)
-    table_findings = [item for item in findings if item.category == verify_repo.FindingCategory.TABLE]
-    assert len(table_findings) == 0, f"Escaped pipe caused false-positive mismatch: {table_findings}"
+    verify_repo.check_course_routing_integrity(findings, base_dir=tmp_path)
+    assert findings == [], f"Escaped pipe or valid 3-column table caused false-positive findings: {findings}"
+
+
+def test_course_routing_integrity_flags_missing_file_bad_columns_and_folder_refs(tmp_path):
+    missing_findings = []
+    verify_repo.check_course_routing_integrity(missing_findings, base_dir=tmp_path)
+    assert any(f.category == verify_repo.FindingCategory.ROUTING for f in missing_findings)
+
+    routing_file = tmp_path / verify_repo.COURSE_ROUTING_DOC
+    routing_file.parent.mkdir(parents=True)
+    routing_file.write_text(
+        "# Course Routing Map\n\n"
+        "Invalid ref: `99_Bogus_Folder`\n\n"
+        "| الكلمة الدلالية | المادة المعتمدة |\n"
+        "| --- | --- |\n"
+        "| (اختبار) | **مادة** | extra |\n",
+        encoding="utf-8",
+    )
+    bad_findings = []
+    verify_repo.check_course_routing_integrity(bad_findings, base_dir=tmp_path)
+    assert any(f.category == verify_repo.FindingCategory.ROUTING and "99_Bogus_Folder" in f.message for f in bad_findings)
+    assert any(f.category == verify_repo.FindingCategory.TABLE for f in bad_findings)
+
 
 def test_negative_phrasing_detection(tmp_path):
-    bad_doc = tmp_path / "CONTEXT.md"
+    bad_doc = tmp_path / verify_repo.COURSE_ROUTING_DOC
+    bad_doc.parent.mkdir(parents=True)
     bad_doc.write_text("هنا قاعدة: لا تفعل ذلك أبداً.", encoding="utf-8")
 
     findings = []
@@ -76,12 +99,14 @@ def test_check_no_arabic_in_backticks(tmp_path):
         "Invalid Arabic backtick: `مفيهوش` and `**(نص المتن)**`.\n",
         encoding="utf-8",
     )
+    routing_doc = ref_dir / "course-routing.md"
+    routing_doc.write_text("| `(زاد)` | **زاد المعاد** | زاد المعاد |\n", encoding="utf-8")
 
     findings = []
     verify_repo.check_no_arabic_in_backticks(findings, base_dir=tmp_path)
-    assert len(findings) == 2
-    assert all(f.line_number == 2 for f in findings)
+    assert len(findings) == 3
     assert any("مفيهوش" in f.message for f in findings)
+    assert any(f.file_path == verify_repo.COURSE_ROUTING_DOC and "(زاد)" in f.message for f in findings)
 
 
 def test_check_directories_allows_processed_subdirectories(tmp_path):
@@ -116,7 +141,6 @@ def test_check_no_root_scratch_allows_standard_files(tmp_path):
     for filename in (
         "AGENTS.md",
         "CODING_STANDARDS.md",
-        "CONTEXT.md",
         "GLOSSARY.md",
         "Word base.docx",
         ".gitignore",
@@ -143,11 +167,12 @@ def test_check_no_root_scratch_flags_unauthorized_scratch(tmp_path):
 
 
 def test_check_no_root_scratch_rejects_retired_root_files(tmp_path):
+    (tmp_path / "CONTEXT.md").write_text("Retired", encoding="utf-8")
     (tmp_path / "README.md").write_text("Retired", encoding="utf-8")
     (tmp_path / "handoff.md").write_text("Retired", encoding="utf-8")
 
     scratch_findings = _scratch_findings(tmp_path)
-    assert {f.file_path for f in scratch_findings} == {"README.md", "handoff.md"}
+    assert {f.file_path for f in scratch_findings} == {"CONTEXT.md", "README.md", "handoff.md"}
 
 
 def test_check_no_root_scratch_allows_git_worktree_pointer_file(tmp_path):
@@ -229,8 +254,36 @@ def test_glossary_domain_language_purity():
     glossary_path = REPO_ROOT / "GLOSSARY.md"
     assert glossary_path.is_file(), "GLOSSARY.md must exist in repo root"
     content = glossary_path.read_text(encoding="utf-8")
-    assert "<matn_source>" not in content, "GLOSSARY.md must not contain implementation detail '<matn_source>'"
-    assert "seam splitting" not in content, "GLOSSARY.md must not contain implementation detail 'seam splitting'"
+
+    required_terms = (
+        "**The Curriculum**",
+        "**Diff Loop**",
+        "**Conservative Doubt**",
+        "**Sandwiched Context**",
+        "**Oral Citation**",
+    )
+    for term in required_terms:
+        assert term in content, f"GLOSSARY.md must define domain term {term}"
+
+    forbidden_leaks = (
+        "<matn_source>",
+        "seam splitting",
+        "12-course",
+        "Markdown file",
+        "export scripts",
+        "01_Matn_Sources",
+        "02_Raw_Inputs",
+        "03_AI_Outputs",
+        "04_Training_Data",
+        "lecture_number",
+        "subject_name",
+        "audio_file",
+        "CONTEXT.md",
+        ".py",
+        "استدراك السقط",
+    )
+    for leak in forbidden_leaks:
+        assert leak not in content, f"GLOSSARY.md must not contain implementation/legacy detail {leak!r}"
 
 
 def test_check_no_hardcoded_skill_paths(tmp_path):
@@ -259,6 +312,24 @@ def test_tafreegh_skill_uses_workspace_relative_script_paths():
     assert "Users/L" not in content
     assert "py .agents/skills/tafreegh/scripts/export_docx.py" in content
     assert "py .agents/skills/tafreegh/scripts/verify_docx.py" in content
+
+
+def test_course_routing_reference_and_scholarly_context_migrated():
+    assert not (REPO_ROOT / "CONTEXT.md").exists(), "Legacy CONTEXT.md must be retired"
+
+    routing_content = (REPO_ROOT / verify_repo.COURSE_ROUTING_DOC).read_text(encoding="utf-8")
+    for expected_meta in (
+        "للإمام ابن القيم",
+        "للإمام ابن الجوزي",
+        "للإمام النووي",
+        "للشيخ صفي الرحمن المباركفوري",
+    ):
+        assert expected_meta in routing_content
+
+    skill_content = (REPO_ROOT / ".agents" / "skills" / "tafreegh" / "SKILL.md").read_text(encoding="utf-8")
+    assert "شيخ الإسلام ابن تيمية" in skill_content
+    assert "الإمام ابن القيم" in skill_content
+    assert "فضيلة الشيخ أسامة" in skill_content
 
 
 def test_pytest_isolates_tafreegh_onedrive_base_to_scratch():
