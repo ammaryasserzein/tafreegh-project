@@ -40,11 +40,11 @@ When Egyptian dialect expressions occur in the speaker's explanation, normalize 
 - **Preserved Titles & Kunyas**: Retain relational, scholarly, or kunya prefixes before **فلان**: أخوكم فلان، الشيخ فلان، يا دكتور فلان، أبو فلان، يا أبا فلان، الأخ فلان، الأخت فلان، and suffixes such as فلان بيه.
   - Collapse multi-word attendee names and surnames into a single **فلان** while retaining the title or kunya (الشيخ عبد الرحمن صابر -> الشيخ فلان، محمد صلاح -> فلان، أحمد عكاشة -> فلان).
 - **Preserved Non-Attendee Names**: Retain classical textbook hypothetical placeholders (زيد، عمرو، بكر، هند), historical or narrative figures (جحا)، the fixed ceremonial thank-you name (إبراهيم), and scholars or Companions.
-- **Known Attendee Names**: Unambiguous recurring classroom names flagged automatically (معاذ، طارق، سارة، لؤي، حسني، هاني، بيدو، حامد، مصطفى، عاطف، عكاشة).
+- **Known Attendee Names**: Unambiguous recurring classroom names flagged automatically (معاذ، طارق، سارة، لؤي، حسني، هاني، بيدو، حامد، مصطفى، عاطف، عكاشة، محمد جمال، محمد صلاح، محمد سالم، حسن جمال، أحمد عكاشة، محمد عاطف).
 
 ## Colloquial Negation Rules
 
-- **Fused Negation Particles**: Single connected word: **مفيهوش**، **مالهاش**، **ملوش**، **مفيش**، **مكانوش**، **ميقفوش**، **منيش**، **ماليش**، **ماهوش**، **ماهياش** (e.g., **منيش شايف**).
+- **Fused Negation Particles**: Single connected word: **مفيهوش**، **مالهاش**، **ملوش**، **مفيش**، **مكانوش**، **ميقفوش**، **منيش**، **ماليش**، **مليش**، **ماهوش**، **مهوش**، **ماهياش**، **مهياش** (e.g., **منيش شايف**).
 - **Compound Verb Negation**: Write ما + فعل + ش as separate particles: **ما جتش**، **ما حصلش**، **ما حدش**، **ما فيهاش**.
 
 ## Context-Sensitive Homographs & Bare Spoken Endings
@@ -59,12 +59,12 @@ When Egyptian dialect expressions occur in the speaker's explanation, normalize 
 
 Colloquial markers, vocabulary, and verbal forms identifying non-classical commentary:
 
-- **Colloquial Particles & Vocabulary**: **كدا**، **كده**، **ده**، **دا**، **دي**، **ايه**، **إيه**، **الإيه**، **ازاي**، **ازاى**، **امتى**، **ليه**، **كمان**، **احنا**، **إحنا**، **برضه**، **برضو**، **علطول**، **أومال**، **امال**، **مش**، **عشان**، **علشان**، **بقى**، **حد**، **تاني**، **قوي**، **خالص**، **يلا**، **طب**، **طيب**، **يعني**، **بتاع**، **بتوع**، **اللي**، **دلوقتي**، **شوية**، **طبعا**، **أهو**، **اهو**، **يبقى**، **ماشي**، **ولواحد**، **الفلوس**، **معدي**، **عجوزة**، **عجوزه**، **مين**، **خلاص**، **معلش**.
+- **Colloquial Particles & Vocabulary**: **كدا**، **كده**، **ده**، **دا**، **دي**، **ايه**، **إيه**، **الإيه**، **ازاي**، **ازاى**، **امتى**، **ليه**، **كمان**، **احنا**، **إحنا**، **برضه**، **برضو**، **علطول**، **أومال**، **امال**، **مش**، **عشان**، **علشان**، **بقى**، **حد**، **تاني**، **قوي**، **خالص**، **يلا**، **طب**، **طيب**، **يعني**، **بتاع**، **بتوع**، **اللي**، **دلوقتي**، **شوية**، **طبعا**، **أهو**، **اهو**، **يبقى**، **ماشي**، **ولواحد**، **الفلوس**، **معدي**، **عجوزة**، **عجوزه**، **مين**، **معلش**.
 - **Colloquial Verbal Forms & Prefixes**:
   - Present and continuous verbs with بـ: **بيقول**، **يقولوا**، **تلاقي**، **بقول**، **بتعرف**، **بتستعمله**، **بيمشوا**.
   - Future verbs with prefix هـ: **هشتري**.
   - Passive verbs with prefix اتـ: **اتسرق**، **اتسرقت**، **اتكسر**، **اتعمل**.
-  - Colloquial narrative verbs: **خليته**، **اعمل**، **جابه**، **جالك**، **نخليه**.
+  - Colloquial narrative verbs: **خليته**، **جابه**، **جالك**، **نخليه**.
   - Volitional particles: **عاوز**، **عايز**، **عايزة**.
 - **Colloquial Negation**: **مفيش**، **مافيش**، **مكانش**، **ماكانش**، **ملوش**، **منيش**.
 

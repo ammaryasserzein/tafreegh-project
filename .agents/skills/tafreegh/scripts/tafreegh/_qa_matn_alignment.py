@@ -9,9 +9,12 @@ from pathlib import Path
 
 from ._qa_models import ParagraphRecord, ValidationReport
 from .arabic_normalizer import (
+    CITATION_SPAN_RE,
     collapse_whitespace,
     has_tashkeel,
+    mask_citations,
     normalize_arabic_search,
+    normalize_nfc_collapsed,
     strip_tashkeel_preserving_citations,
 )
 from .matn_matcher import (
@@ -21,7 +24,6 @@ from .matn_matcher import (
 )
 from .word_gateway import read_matn_source_content
 
-_CITATION_TOKEN_RE = re.compile(r'(\([^)]*\)|﴿[^﴾]*﴾|"[^"]*")')
 _ARABIC_LETTER_RE = re.compile(r"[\u0621-\u064A\u0671]")
 _TANWEEN_FATHA_AT_END_RE = re.compile(
     r"(?<=[\u0621-\u064A])\u064B(?=[اةءى]?(?![\u0621-\u064A\u064B-\u065F\u0670\u0640]))"
@@ -37,11 +39,6 @@ class _SegmentToken:
     is_citation: bool
 
 
-def _nfc_collapsed(text: str) -> str:
-    """Collapse whitespace and normalize Unicode combining mark order to NFC."""
-    return unicodedata.normalize("NFC", collapse_whitespace(text))
-
-
 def _strip_seam_punct(text: str) -> str:
     """Strip sentence/clause seam dots and Arabic commas while preserving letters and diacritics."""
     return collapse_whitespace(_SEAM_PUNCT_RE.sub("", text))
@@ -51,11 +48,6 @@ def _has_non_orthographic_tashkeel(text: str) -> bool:
     """Return True when text has diacritics other than standalone word-final tanween-fatha."""
     without_tanween = _TANWEEN_FATHA_AT_END_RE.sub("", text)
     return has_tashkeel(without_tanween)
-
-
-def _strip_citations_only(text: str) -> str:
-    """Remove parenthesized, ornate, and quoted citations while preserving outer tashkeel."""
-    return _CITATION_TOKEN_RE.sub(" ", text)
 
 
 def _append_ws_tokens(tokens: list[_SegmentToken], segment: str, offset: int) -> None:
@@ -75,7 +67,7 @@ def _tokenize_with_citations(text: str) -> list[_SegmentToken]:
     """Split NFC-collapsed segment into whitespace tokens while keeping citation spans atomic."""
     tokens: list[_SegmentToken] = []
     pos = 0
-    for m in _CITATION_TOKEN_RE.finditer(text):
+    for m in CITATION_SPAN_RE.finditer(text):
         if m.start() > pos:
             _append_ws_tokens(tokens, text[pos : m.start()], pos)
         tokens.append(
@@ -113,7 +105,7 @@ class MatnAlignmentValidator:
 
     def _tail_matches_anchored_span(self, start_pos: int, end_pos: int, tail: str) -> bool:
         """Return True when tail appears verbatim in the NFC-normalized source slice around [start_pos, end_pos)."""
-        around = _nfc_collapsed(
+        around = normalize_nfc_collapsed(
             self.source[max(0, start_pos - 4) : min(len(self.source), end_pos + 4)]
         )
         return bool(tail and tail in around)
@@ -133,7 +125,7 @@ class MatnAlignmentValidator:
                 wide = SequentialMatnMatcher(self.source, forward_lookahead=len(self.source) + 1)
                 m_res = wide.match_segment(candidate)
             if m_res.mode == MatchMode.PRIMARY and (
-                _strip_seam_punct(candidate) == _strip_seam_punct(_nfc_collapsed(m_res.text))
+                _strip_seam_punct(candidate) == _strip_seam_punct(normalize_nfc_collapsed(m_res.text))
             ):
                 return True
         return False
@@ -231,14 +223,14 @@ class MatnAlignmentValidator:
 
     def verify_exported_segment(self, exported_text: str) -> bool:
         """Verify an exported Matn paragraph against canonical Matn source without violating cursor semantics."""
-        inner_collapsed = _nfc_collapsed(exported_text)
+        inner_collapsed = normalize_nfc_collapsed(exported_text)
         if not inner_collapsed:
             return True
 
         res = self._matcher.match_segment(inner_collapsed)
-        res_collapsed = _nfc_collapsed(res.text)
+        res_collapsed = normalize_nfc_collapsed(res.text)
 
-        outer_text = _strip_citations_only(inner_collapsed)
+        outer_text = mask_citations(inner_collapsed)
         has_outer_tashkeel = _has_non_orthographic_tashkeel(outer_text)
 
         if res.mode == MatchMode.PRIMARY:
@@ -256,7 +248,7 @@ class MatnAlignmentValidator:
             if not comp_m:
                 return False
             orig_prefix, orig_tail = comp_m.group(1), comp_m.group(2).strip()
-            if _has_non_orthographic_tashkeel(_strip_citations_only(orig_prefix)):
+            if _has_non_orthographic_tashkeel(mask_citations(orig_prefix)):
                 return False
             return self._tail_matches_anchored_span(res.start_pos, res.end_pos, orig_tail)
 

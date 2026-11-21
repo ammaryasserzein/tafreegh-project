@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from ._qa_models import HEADER_LINE_COUNT, STUDENT_PREFIX, ParagraphRecord, ValidationReport
-from .arabic_normalizer import normalize_arabic, strip_tashkeel
+from .arabic_normalizer import mask_citations, normalize_arabic, normalize_dialect_markers, strip_tashkeel
 
 FALLBACK_MATN_TRIGGERS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("قالوا", re.compile(r"(?:^|[،.؟!:)»\"\s])(قالوا(?!\w)(?:\s+له)?\s*:\s*[^.؟!\n]+)")),
@@ -21,8 +21,10 @@ FALLBACK_MATN_TRIGGERS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "قال العالم",
         re.compile(
             r"(?:^|[،.؟!:)»\"\s])([وف]?(?:قال|يقول)\s+"
-            r"(?:الشيخ|الإمام|المصنف|ابن|أبو|القاضي|الحافظ)\s+"
-            r"(?!فلان(?!\w))[\u0621-\u064A\u064B-\u065F\u0670\u0671]+(?:\s+[\u0621-\u064A\u064B-\u065F\u0670\u0671]+){0,2}\s*:\s*[^.؟!\n]+)"
+            r"(?:(?:الشيخ|الإمام|المصنف|القاضي|الحافظ)"
+            r"(?:\s+(?!فلان(?!\w))[\u0621-\u064A\u064B-\u065F\u0670\u0671]+){0,3}|"
+            r"(?:ابن|أبو)\s+(?!فلان(?!\w))[\u0621-\u064A\u064B-\u065F\u0670\u0671]+"
+            r"(?:\s+[\u0621-\u064A\u064B-\u065F\u0670\u0671]+){0,2})\s*:\s*[^.؟!\n]+)"
         ),
     ),
     ("قال", re.compile(r"(?:^|[،.؟!:)»\"\s])(قال(?!\w)(?!\s+(?:تعالى|الله|النبي|رسول))\s*:\s*[^.؟!\n]+)")),
@@ -31,20 +33,16 @@ FALLBACK_MATN_TRIGGERS: tuple[tuple[str, re.Pattern[str]], ...] = (
 _ARABIC_WORD_RE = re.compile(r"[\u0621-\u064A\u064B-\u065F\u0670\u0671]+")
 _HO_WALA_RE = re.compile(r"(?<!\w)هو\s+[\u0621-\u064A\u064B-\u065F\u0670\u0671\s]+\s+ولا\s+")
 _MA_VERB_SH_RE = re.compile(r"(?<!\w)ما\s+[\u0621-\u064A]{2,}ش(?!\w)")
-_MA_PRON_RE = re.compile(r"(?<!\w)ما\s+(?:هو|هي|هم)(?!\w)")
+_MA_HUWA_PREFIX_RE = re.compile(r"(?<!\w)ما\s+هو(?!\w)")
 _SUBCLAUSE_DELIM_RE = re.compile(r"[،.؟!:\n]")
 _SENTENCE_DELIM_RE = re.compile(r"[.\n]")
 _CLAUSE_SPLIT_RE = re.compile(r"https?://|\s*-\s*يعني\s+|[،]")
 _ANECDOTE_DIALOGUE_LABELS: frozenset[str] = frozenset({"قال", "قالوا", "قلت"})
 
-_PAREN_SPAN_RE = re.compile(r"\([^()]*\)")
-_QUOTE_SPAN_RE = re.compile(r'"[^"]*"')
-_MUSHAF_SPAN_RE = re.compile(r"﴿[^﴾]*﴾")
-_GUILLEMET_SPAN_RE = re.compile(r"«[^»]*»")
 _LEADING_MASKED_CITATION_RE = re.compile(
     r"^(?:قال|قالوا|قلت)(?:\s+له)?\s*:\s*(?:\(\)|\"\"|﴿﴾|«»)"
 )
-_QULTU_OBJ_EXEMPT_RE = re.compile(r"^قلت\s+(?:له|لها|لكم|لك|لهم)(?!\w)")
+_FIRST_PERSON_ADDRESSED_QULTU_RE = re.compile(r"^قلت\s+(?:له|لها|لكم|لك|لهم)(?!\w)")
 _SUBJECT_EXEMPT_RE = re.compile(
     r"(?:^|[\s،.؟!:)»\"])(?:ما\s+)?(?:انت|انا|هو|هم|[وف]?النبي(?:\s+(?:صلى\s+الله\s+عليه\s+وسلم|ﷺ))?)$"
 )
@@ -52,11 +50,7 @@ _SUBJECT_EXEMPT_RE = re.compile(
 
 def _mask_citations(text: str) -> str:
     """Replace parenthesized, quoted, and bracketed citations with neutral placeholders."""
-    masked = _PAREN_SPAN_RE.sub("()", text)
-    masked = _PAREN_SPAN_RE.sub("()", masked)
-    masked = _QUOTE_SPAN_RE.sub('""', masked)
-    masked = _MUSHAF_SPAN_RE.sub("﴿﴾", masked)
-    return _GUILLEMET_SPAN_RE.sub("«»", masked)
+    return mask_citations(text, lambda m: f"{m.group(0)[0]}{m.group(0)[-1]}")
 
 
 def _has_colloquial_marker(
@@ -65,7 +59,7 @@ def _has_colloquial_marker(
 ) -> bool:
     """Return True if text contains Egyptian colloquial words or verbal negation/future patterns."""
     plain = strip_tashkeel(text)
-    if _HO_WALA_RE.search(plain) or _MA_VERB_SH_RE.search(plain) or _MA_PRON_RE.search(plain):
+    if _HO_WALA_RE.search(plain) or _MA_VERB_SH_RE.search(plain):
         return True
     for word in _ARABIC_WORD_RE.findall(plain):
         word_norm = normalize_arabic(word)
@@ -76,6 +70,16 @@ def _has_colloquial_marker(
         if word.startswith(("هت", "هي", "بي", "بت", "ما")) and word.endswith("ش") and len(word) >= 4:
             return True
     return False
+
+
+def _has_colloquial_prefix(
+    prefix: str,
+    normalized_markers: frozenset[str] | set[str],
+) -> bool:
+    """Return True if pre-trigger clause text has colloquial markers or Egyptian 'ما هو'."""
+    return _has_colloquial_marker(prefix, normalized_markers) or bool(
+        _MA_HUWA_PREFIX_RE.search(strip_tashkeel(prefix))
+    )
 
 
 def _extract_leading_classical_clause(
@@ -100,9 +104,7 @@ def check_unbolded_fallback_matn(
     dialect_markers: frozenset[str] | set[str],
 ) -> None:
     """Detect unbolded Classical Arabic Sharh/Matn clauses inside explanation paragraphs."""
-    normalized_markers = {
-        normalize_arabic(strip_tashkeel(marker)) for marker in dialect_markers
-    } | set(dialect_markers)
+    normalized_markers = normalize_dialect_markers(dialect_markers)
 
     for rec in para_records:
         if rec.index < HEADER_LINE_COUNT or rec.is_matn:
@@ -122,12 +124,12 @@ def check_unbolded_fallback_matn(
         for _, _, label, m in matches:
             before_match = masked[: m.start(1)]
             cand = m.group(1).strip()
-            if _QULTU_OBJ_EXEMPT_RE.match(cand) or _LEADING_MASKED_CITATION_RE.match(cand):
+            if _FIRST_PERSON_ADDRESSED_QULTU_RE.match(cand) or _LEADING_MASKED_CITATION_RE.match(cand):
                 continue
 
             if label in _ANECDOTE_DIALOGUE_LABELS:
                 anecdote_prefix = _SENTENCE_DELIM_RE.split(before_match)[-1]
-                if anecdote_dialogue or _has_colloquial_marker(anecdote_prefix, normalized_markers):
+                if anecdote_dialogue or _has_colloquial_prefix(anecdote_prefix, normalized_markers):
                     anecdote_dialogue = True
                     continue
                 if (
@@ -138,7 +140,7 @@ def check_unbolded_fallback_matn(
                     continue
             else:
                 prefix = _SUBCLAUSE_DELIM_RE.split(before_match)[-1]
-                if _has_colloquial_marker(prefix, normalized_markers):
+                if _has_colloquial_prefix(prefix, normalized_markers):
                     continue
 
             core_clause = _extract_leading_classical_clause(cand, normalized_markers)

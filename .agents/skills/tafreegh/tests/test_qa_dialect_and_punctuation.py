@@ -116,6 +116,7 @@ class TestPunctuationAndOrthographyQA:
             ("قال الشاعر «شر بلدة» في هذا البيت.", False),
             ("هذا - طبعًا - مهم جدا.", False),
             ("كلام — مهم، وكلام – آخر.", False),
+            ('قال: "ذكر «شر بلدة» في الحديث" ثم أكمل.', False),
         )
         report = ValidationReport(docx_path="forbidden_punc.docx")
         check_punctuation_and_orthography(records, report)

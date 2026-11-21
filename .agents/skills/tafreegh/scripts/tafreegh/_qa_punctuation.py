@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from ._qa_models import HEADER_LINE_COUNT, ParagraphRecord, ValidationReport
-from .arabic_normalizer import strip_tashkeel
+from .arabic_normalizer import mask_citations, strip_tashkeel
 
 _BRACKET_SPACE_RE = re.compile(r"\(\s+|\s+\)")
 _PAIRED_QUOTE_RE = re.compile(r'"([^"]*)"')
@@ -14,7 +14,6 @@ _MULTI_DOT_RE = re.compile(r"\.{2,}")
 _MID_PERIOD_RE = re.compile(r"(?<!\d)\.(?!\d)")
 _BASE_FORBIDDEN_PUNC_RE = re.compile(r"[,?;]")
 _PROSE_BRACKETS_RE = re.compile(r"[\[\]{}]")
-_PAREN_OR_QUOTE_RE = re.compile(r'\([^)]*\)|"[^"]*"')
 _GUILLEMET_RE = re.compile(r"[«»]")
 _DASH_PUNC_RE = re.compile(r"(?<!\d)\s+-\s+(?!\d)|[—–]")
 _IZHAN_NUN_RE = re.compile(r"(?<!\w)إذن(?!\w)")
@@ -64,7 +63,10 @@ def _collect_forbidden_punctuation(stripped: str, *, is_matn: bool) -> set[str]:
     if is_matn:
         return found
     found.update(_PROSE_BRACKETS_RE.findall(stripped))
-    prose_outside_citations = _PAREN_OR_QUOTE_RE.sub(" ", stripped)
+    prose_outside_citations = mask_citations(
+        stripped,
+        lambda m: m.group(0) if m.group(0).startswith("«") else " ",
+    )
     found.update(_GUILLEMET_RE.findall(prose_outside_citations))
     for dash_m in _DASH_PUNC_RE.finditer(stripped):
         found.add(dash_m.group(0).strip())

@@ -12,14 +12,13 @@ Implements ADR 0002:
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 
 from .arabic_normalizer import (
     build_search_index,
-    collapse_whitespace,
     normalize_arabic_search,
+    normalize_nfc_collapsed,
     strip_tashkeel_preserving_citations,
 )
 
@@ -60,12 +59,6 @@ COMPOUND_SHARH_SPLIT_RE = re.compile(
 
 _LINEBREAK_RUN_RE = re.compile(r"[ \t]*(?:\r?\n|\r)+[ \t]*")
 _TRAILING_PUNCT_CHARS = frozenset("،.:!؟")
-_collapse_whitespace = collapse_whitespace
-
-
-def _normalize_nfc_collapsed(text: str) -> str:
-    """Collapse whitespace and normalize Unicode combining mark order to NFC."""
-    return unicodedata.normalize("NFC", _collapse_whitespace(text))
 
 
 def collapse_linebreaks(text: str) -> str:
@@ -85,7 +78,7 @@ class SequentialMatnMatcher:
         self.history: list[MatnMatchResult] = []
 
         self._search_index = build_search_index(self.source)
-        self._collapsed_source = _normalize_nfc_collapsed(self.source)
+        self._collapsed_source = normalize_nfc_collapsed(self.source)
 
     @property
     def cursor(self) -> int:
@@ -117,7 +110,7 @@ class SequentialMatnMatcher:
 
     def contains_verbatim(self, text: str) -> bool:
         """Returns True when whitespace-collapsed NFC text appears verbatim in canonical Matn source."""
-        collapsed = _normalize_nfc_collapsed(text)
+        collapsed = normalize_nfc_collapsed(text)
         return bool(collapsed and collapsed in self._collapsed_source)
 
     def contains_normalized(self, text: str) -> bool:
@@ -127,7 +120,7 @@ class SequentialMatnMatcher:
 
     def advance_to_canonical_occurrence(self, text: str) -> bool:
         """Advances cursor to the next canonical verbatim occurrence ahead of cursor; returns True if moved."""
-        collapsed = _normalize_nfc_collapsed(text)
+        collapsed = normalize_nfc_collapsed(text)
         norm_q = normalize_arabic_search(text)
         if not collapsed or not norm_q:
             return False
@@ -143,7 +136,7 @@ class SequentialMatnMatcher:
             pad = max(4, len(collapsed) - len(canon_slice) + 4)
             lo = max(0, orig_start - pad)
             hi = min(len(self.source), orig_end + pad)
-            if collapsed in _normalize_nfc_collapsed(self.source[lo:hi]):
+            if collapsed in normalize_nfc_collapsed(self.source[lo:hi]):
                 self._cursor_norm = norm_end
                 self._active_norm_pos = norm_end
                 self._cursor = orig_end
@@ -217,6 +210,24 @@ class SequentialMatnMatcher:
             pos = idx
         return -1
 
+    def _locate_compound_tail_start(self, tail_query: str) -> int:
+        """Locate normalized start offset for a single-word or multi-word Compound Sharh-Matn tail."""
+        norm_source = self._search_index.normalized
+        if " " not in tail_query:
+            # Single-word tail must sit in a tight 120-char forward window at active reading position (or high-water cursor)
+            for base_pos in dict.fromkeys((self._active_norm_pos, self._cursor_norm)):
+                win_end = min(len(norm_source), base_pos + 120)
+                norm_start = self._find_whole_word(base_pos, win_end, tail_query, reverse=False)
+                if norm_start != -1:
+                    return norm_start
+            return -1
+
+        search_start, window_end = self._forward_window()
+        norm_start = self._find_whole_word(search_start, window_end, tail_query, reverse=False)
+        if norm_start != -1 and (norm_start + len(tail_query)) > self._cursor_norm:
+            return norm_start
+        return self._find_whole_word(0, self._cursor_norm, tail_query, reverse=True)
+
     def _match_compound_sharh_matn(self, spoken_segment: str) -> MatnMatchResult | None:
         """Matches compound Fallback-Sharh prefix + Primary-Matn tail (e.g. 'ثم بين وجه ذلك بقوله، وَذَلِكَ')."""
         cleaned = strip_tashkeel_preserving_citations(spoken_segment).strip()
@@ -229,56 +240,20 @@ class SequentialMatnMatcher:
         if not tail_query or len(tail_query) < 3:
             return None
 
-        norm_source = self._search_index.normalized
-        is_single_word = " " not in tail_query
-        if is_single_word:
-            # Single-word tail must sit in a tight 120-char forward window at active reading position (or high-water cursor)
-            norm_start = -1
-            for base_pos in dict.fromkeys((self._active_norm_pos, self._cursor_norm)):
-                win_end = min(len(norm_source), base_pos + 120)
-                norm_start = self._find_whole_word(base_pos, win_end, tail_query, reverse=False)
-                if norm_start != -1:
-                    break
-            if norm_start == -1:
-                return None
-            norm_end = norm_start + len(tail_query)
-            return self._record_anchored_match(
-                norm_start,
-                norm_end,
-                mode=MatchMode.FALLBACK,
-                is_fallback=True,
-                is_re_read=norm_end <= self._cursor_norm,
-                prefix=sharh_prefix,
-                spoken_segment=spoken_segment,
-            )
+        norm_start = self._locate_compound_tail_start(tail_query)
+        if norm_start == -1:
+            return None
 
-        # Multi-word tail: standard forward window then look-behind
-        search_start, window_end = self._forward_window()
-        norm_start = self._find_whole_word(search_start, window_end, tail_query, reverse=False)
-        if norm_start != -1 and (norm_start + len(tail_query)) > self._cursor_norm:
-            return self._record_anchored_match(
-                norm_start,
-                norm_start + len(tail_query),
-                mode=MatchMode.FALLBACK,
-                is_fallback=True,
-                is_re_read=False,
-                prefix=sharh_prefix,
-                spoken_segment=spoken_segment,
-            )
-
-        idx_behind = self._find_whole_word(0, self._cursor_norm, tail_query, reverse=True)
-        if idx_behind != -1:
-            return self._record_anchored_match(
-                idx_behind,
-                idx_behind + len(tail_query),
-                mode=MatchMode.FALLBACK,
-                is_fallback=True,
-                is_re_read=True,
-                prefix=sharh_prefix,
-                spoken_segment=spoken_segment,
-            )
-
-        return None
+        norm_end = norm_start + len(tail_query)
+        return self._record_anchored_match(
+            norm_start,
+            norm_end,
+            mode=MatchMode.FALLBACK,
+            is_fallback=True,
+            is_re_read=norm_end <= self._cursor_norm,
+            prefix=sharh_prefix,
+            spoken_segment=spoken_segment,
+        )
 
     def _create_fallback_result(self, spoken_segment: str) -> MatnMatchResult:
         res = MatnMatchResult(

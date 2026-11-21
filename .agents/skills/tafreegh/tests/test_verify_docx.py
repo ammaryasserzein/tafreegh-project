@@ -1324,6 +1324,28 @@ button_magic Source guide
             self.assertTrue(all(i.severity == Severity.ERROR for i in fb_issues))
             self.assertFalse(report.passed)
 
+    def test_ma_huwa_only_suppresses_prefix_and_never_truncates_classical_quotes(self):
+        md = """بسم الله الرحمن الرحيم
+المادة: المنطق (السلم المنورق)
+2026-11-07
+
+قال المصنف: ما هو إلا قول ظاهر منصوص في المذهب.
+
+ما هو قال: ما فيش مشكلة.
+
+ما هو قال: هذا قول ظاهر منصوص في المذهب.
+
+قال: ما هي إلا مسألة عظيمة في باب الفقه، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "ma_huwa_scope.docx"
+            create_docx(md, docx_path)
+            report = verify_docx(docx_path)
+            fb_issues = [i for i in report.issues if i.code == "UNBOLDED_FALLBACK_MATN"]
+            self.assertEqual([i.paragraph_index for i in fb_issues], [3, 6])
+            self.assertTrue(all(i.severity == Severity.ERROR for i in fb_issues))
+            self.assertFalse(report.passed)
+
 
 class TestVerifyDocxCLI(unittest.TestCase):
     def test_cli_returns_zero_on_valid_and_nonzero_on_invalid_with_json(self):

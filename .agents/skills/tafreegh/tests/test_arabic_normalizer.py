@@ -3,12 +3,16 @@
 import pytest
 
 from tafreegh.arabic_normalizer import (
+    CITATION_SPAN_RE,
     IndexedArabicText,
     build_search_index,
     has_tashkeel,
+    mask_citations,
     normalize_arabic,
     normalize_arabic_search,
     normalize_arabic_token,
+    normalize_dialect_markers,
+    normalize_nfc_collapsed,
     strip_tashkeel,
     strip_tashkeel_preserving_citations,
 )
@@ -185,4 +189,51 @@ def test_extract_span_preserves_unbalanced_closing_delimiters_without_overextend
 
     assert extracted == expected
     assert source[orig_start:orig_end] == expected
+
+
+def test_normalize_nfc_collapsed_normalizes_combining_order_and_whitespace():
+    shadda_first = "  قَالَ\t\n \u0627\u0644\u0644\u0651\u064e\u0647\u064f   تَعَالَى  "
+    fatha_first_nfc = "قَالَ \u0627\u0644\u0644\u064e\u0651\u0647\u064f تَعَالَى"
+    assert normalize_nfc_collapsed(shadda_first) == fatha_first_nfc
+    assert normalize_nfc_collapsed(f"  {fatha_first_nfc}  ") == fatha_first_nfc
+    assert normalize_nfc_collapsed("") == ""
+
+
+def test_citation_span_re_and_mask_citations_handle_all_delimiters_and_callbacks():
+    sample = 'قال: (آيَةٌ) و﴿سُورَةٌ﴾ و"حَدِيثٌ" و«أَثَرٌ» ثم انتهى.'
+    assert CITATION_SPAN_RE.findall(sample) == ["(آيَةٌ)", "﴿سُورَةٌ﴾", '"حَدِيثٌ"', "«أَثَرٌ»"]
+    assert mask_citations(sample) == "قال:   و  و  و  ثم انتهى."
+    assert mask_citations(sample, lambda m: f"{m.group(0)[0]}{m.group(0)[-1]}") == (
+        'قال: () و﴿﴾ و"" و«» ثم انتهى.'
+    )
+    assert strip_tashkeel_preserving_citations('قَالَ: «حَدِيثٌ» وَقَالَ') == "قال: «حَدِيثٌ» وقال"
+
+
+def test_normalize_dialect_markers_expands_hamza_and_tashkeel_forms_for_generators():
+    gen = (m for m in ["أهو", "إِنَّما", "كدا"])
+    expanded = normalize_dialect_markers(gen)
+    assert expanded == frozenset({"أهو", "اهو", "إِنَّما", "انما", "كدا"})
+
+
+def test_query_containing_editorial_citation_matches_source_and_preserves_word_brackets():
+    from tafreegh.matn_matcher import MatchMode, SequentialMatnMatcher
+
+    source = "قَالَ {بَدِيعُ} [البقرة: 117] وَقَالَ: [1] خُلِقَ [الملك: ٣ - ٤] تَفَاوُتٍ [الْعَمَلُ ثَمَرَةٌ] انتهى"
+    query = "قال بديع [البقرة: 117] وقال [1] خلق تفاوت [العمل ثمرة]"
+
+    indexed = build_search_index(source)
+    norm_query = normalize_arabic_search(query)
+    assert norm_query == "قال بديع وقال خلق تفاوت العمل ثمره"
+
+    norm_start = indexed.normalized.index(norm_query)
+    norm_end = norm_start + len(norm_query)
+    _, _, extracted = indexed.extract_span(norm_start, norm_end)
+    assert extracted == "قَالَ {بَدِيعُ} [البقرة: 117] وَقَالَ: [1] خُلِقَ [الملك: ٣ - ٤] تَفَاوُتٍ [الْعَمَلُ ثَمَرَةٌ]"
+
+    matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+    res = matcher.match_segment(query)
+    assert res.mode == MatchMode.PRIMARY
+    assert res.text == extracted
+    assert "[البقرة: 117]" in res.text
+    assert "[الْعَمَلُ ثَمَرَةٌ]" in res.text
 

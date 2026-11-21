@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from . import lecture_identity, word_gateway
-from .arabic_normalizer import normalize_arabic, strip_tashkeel
+from .arabic_normalizer import normalize_arabic, normalize_dialect_markers, strip_tashkeel
 from .lecture_identity import LectureIdentity, sanitize_filename_token
 from .matn_matcher import (
     MatchMode,
@@ -136,12 +136,10 @@ def verify_isolated_segment(text: str, *, catalog: RuleCatalog | None = None) ->
     if not text:
         return False
     active_catalog = catalog if catalog is not None else RuleCatalog.load()
-    normalized_markers = {
-        normalize_arabic(strip_tashkeel(marker)) for marker in active_catalog.dialect_markers
-    }
+    normalized_markers = normalize_dialect_markers(active_catalog.dialect_markers)
     plain = normalize_arabic(strip_tashkeel(text))
     for word in _ARABIC_WORD_RE.findall(plain):
-        if word in normalized_markers or word in active_catalog.dialect_markers:
+        if word in normalized_markers:
             return False
     return True
 

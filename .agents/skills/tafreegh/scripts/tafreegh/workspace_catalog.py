@@ -62,7 +62,8 @@ _DEFAULT_VOCATIVE_STOPWORDS: frozenset[str] = frozenset({
 })
 _ILLUSTRATION_ACTIONS = (
     r"(?:ب?[يت]عمل|ب?[يت]سأل|ب?[يت]قول|قال[ت]?|عايز[ةه]?|عاوز[ةه]?|"
-    r"قاعد[ةه]?|واقف[ةه]?|نايم[ةه]?|جه|جا[تت]|راح[ت]?|شايف[ةه]?|سامع[ةه]?)"
+    r"قاعد[ةه]?|واقف[ةه]?|نايم[ةه]?|جه|جا[تت]|راح[ت]?|شايف[ةه]?|سامع[ةه]?|"
+    r"شديد[ةه]?|طويل[ةه]?|قصير[ةه]?|إنسان|موجود[ةه]?|غائب[ةه]?|حاضر[ةه]?|شاطر[ةه]?)"
 )
 _QUOTE_SPAN_RE = re.compile(r'«[^»]*»|"[^"]*"')
 _HISTORICAL_PREFIX_RE = re.compile(
@@ -350,38 +351,33 @@ class AttendeeAnonymizationRules:
             rf"(?<!\w)[وف]?(?P<trig>ولا\s+(?:إيه|ايه)|إيه|ايه|ها|قول|اتفضل|تفضل|نعم|ماشي|صح|فاهم|خد|خذ|اديله|وصل|لمين)\s+يا\s+"
             rf"{voc_prefix_group}(?P<cand>[\u0621-\u064A]{{3,}})(?!\w)"
         )
-        for m_voc in vocative_re.finditer(text):
-            if self._is_vocative_exempt(
-                text,
-                m_voc,
-                m_voc.group("cand"),
-                m_voc.groupdict().get("prefix"),
-                require_echo_trigger=True,
-            ):
-                continue
-            _record_if_clean("vocative", m_voc)
-
         clause_final_voc_re = re.compile(
             rf"(?<!\w)[وف]?يا\s+{voc_prefix_group}(?P<cand>[\u0621-\u064A]{{3,}})\s*[؟?!]"
         )
-        for m_fvoc in clause_final_voc_re.finditer(text):
-            if self._is_vocative_exempt(
-                text,
-                m_fvoc,
-                m_fvoc.group("cand"),
-                m_fvoc.groupdict().get("prefix"),
-                require_echo_trigger=False,
-            ):
-                continue
-            _record_if_clean("vocative", m_fvoc)
+        for voc_pat, require_echo in ((vocative_re, True), (clause_final_voc_re, False)):
+            for m_voc in voc_pat.finditer(text):
+                if self._is_vocative_exempt(
+                    text,
+                    m_voc,
+                    m_voc.group("cand"),
+                    m_voc.groupdict().get("prefix"),
+                    require_echo_trigger=require_echo,
+                ):
+                    continue
+                _record_if_clean("vocative", m_voc)
 
         cand_names = sorted(
             [n for n in self.known_attendee_names if n != self.placeholder and n not in self.exempt_names],
             key=len,
             reverse=True,
         )
-        if cand_names:
-            cand_alt = "|".join(re.escape(n) for n in cand_names)
+        cand_patterns = [
+            r"\s+".join(re.escape(w) for w in name.split())
+            for name in cand_names
+            if name.split()
+        ]
+        if cand_patterns:
+            cand_alt = "|".join(cand_patterns)
             bare_voc_re = re.compile(
                 rf"(?<!\w)[وف]?(?:يا|يَا)\s+{prefix_group}(?P<cand>{cand_alt})(?!\w)"
             )
@@ -633,18 +629,29 @@ def _parse_dialect_rules(
 
         if "Fused Negation Particles" in stripped:
             tokens = [m[0] or m[1] for m in re.findall(r"\*\*([^*]+)\*\*|`([^`]+)`", stripped)]
+            line_fused_tokens: list[str] = []
+            seen_line_tokens: set[str] = set()
             for tok in tokens:
                 tok_clean = tok.strip()
                 if not re.search(r"[\u0600-\u06FF]", tok_clean) or any(ch.isspace() for ch in tok_clean):
                     continue
+                if tok_clean not in seen_line_tokens:
+                    seen_line_tokens.add(tok_clean)
+                    line_fused_tokens.append(tok_clean)
+            for tok_clean in line_fused_tokens:
                 fused_particles.add(tok_clean)
                 if tok_clean.startswith("م") and not tok_clean.startswith("ما"):
                     rest = tok_clean[1:]
-                    unfused = "ما" + rest
-                    fused_particles.add(unfused)
-                    replacements.append((re.compile(rf"(?<!\w)ما\s*{re.escape(rest)}(?!\w)"), tok_clean))
+                    ma_form = "ما" + rest
+                    fused_particles.add(ma_form)
+                    space_sep, target = (
+                        (r"\s+", ma_form) if ma_form in seen_line_tokens else (r"\s*", tok_clean)
+                    )
                     replacements.append(
-                        (re.compile(rf"(?<!\w)([وف])ما\s*{re.escape(rest)}(?!\w)"), rf"\1{tok_clean}")
+                        (re.compile(rf"(?<!\w)ما{space_sep}{re.escape(rest)}(?!\w)"), target)
+                    )
+                    replacements.append(
+                        (re.compile(rf"(?<!\w)([وف])ما{space_sep}{re.escape(rest)}(?!\w)"), rf"\1{target}")
                     )
         elif "Compound Verb Negation" in stripped:
             tokens = [m[0] or m[1] for m in re.findall(r"\*\*([^*]+)\*\*|`([^`]+)`", stripped)]
@@ -688,7 +695,10 @@ def _parse_dialect_rules(
         elif "Known Attendee Names" in stripped:
             parsed_known: set[str] = set()
             for grp in re.findall(r"\(([^)]+)\)", stripped):
-                parsed_known.update(re.findall(r"[\u0621-\u064A]+", grp))
+                for entry in re.split(r"[،,]", grp):
+                    words = re.findall(r"[\u0621-\u064A]+", entry)
+                    if words:
+                        parsed_known.add(" ".join(words))
             if parsed_known:
                 known_attendee_names = parsed_known
 

@@ -121,51 +121,51 @@ def _aligned_student_indices(ai_slice: list[str], corr_slice: list[str]) -> set[
 
     ai_is_stu, corr_is_stu, match_score, cont_score = _build_alignment_scores(ai_slice, corr_slice)
 
-    # dp[i][j][active]: best score aligning ai_slice[:i] with corr_slice[:j];
+    # scores[i][j][active]: best score aligning ai_slice[:i] with corr_slice[:j];
     # active=1 means ai_slice[i-1] was matched as a split prefix and can absorb trailing fragments.
     neg_inf = float("-inf")
-    dp = [[[0.0, neg_inf] for _ in range(n + 1)] for _ in range(m + 1)]
-    back: list[list[list[tuple[int, int, int, int] | None]]] = [
+    scores = [[[0.0, neg_inf] for _ in range(n + 1)] for _ in range(m + 1)]
+    backpointers: list[list[list[tuple[int, int, int, int] | None]]] = [
         [[None, None] for _ in range(n + 1)] for _ in range(m + 1)
     ]
 
     for i in range(m + 1):
         for j in range(n + 1):
             for active in (0, 1):
-                cur = dp[i][j][active]
+                cur = scores[i][j][active]
                 if cur == neg_inf:
                     continue
-                if i < m and cur > dp[i + 1][j][0]:
-                    dp[i + 1][j][0] = cur
-                    back[i + 1][j][0] = (i, j, active, -1)
-                if j < n and cur > dp[i][j + 1][active]:
-                    dp[i][j + 1][active] = cur
-                    back[i][j + 1][active] = (i, j, active, -1)
+                if i < m and cur > scores[i + 1][j][0]:
+                    scores[i + 1][j][0] = cur
+                    backpointers[i + 1][j][0] = (i, j, active, -1)
+                if j < n and cur > scores[i][j + 1][active]:
+                    scores[i][j + 1][active] = cur
+                    backpointers[i][j + 1][active] = (i, j, active, -1)
                 if i < m and j < n and match_score[i][j] > 0.0:
                     is_split_prefix = (not ai_is_stu[i]) and (len(corr_slice[j]) < len(ai_slice[i]))
                     next_active = 1 if is_split_prefix else 0
                     cand = cur + match_score[i][j]
-                    if cand > dp[i + 1][j + 1][next_active]:
-                        dp[i + 1][j + 1][next_active] = cand
+                    if cand > scores[i + 1][j + 1][next_active]:
+                        scores[i + 1][j + 1][next_active] = cand
                         aligned_stu = j if (ai_is_stu[i] and corr_is_stu[j]) else -1
-                        back[i + 1][j + 1][next_active] = (i, j, active, aligned_stu)
+                        backpointers[i + 1][j + 1][next_active] = (i, j, active, aligned_stu)
                 if active == 1 and i > 0 and j < n and cont_score[i - 1][j] > 0.0:
                     cand = cur + cont_score[i - 1][j]
-                    if cand > dp[i][j + 1][1]:
-                        dp[i][j + 1][1] = cand
-                        back[i][j + 1][1] = (i, j, active, -1)
+                    if cand > scores[i][j + 1][1]:
+                        scores[i][j + 1][1] = cand
+                        backpointers[i][j + 1][1] = (i, j, active, -1)
 
-    state = 1 if dp[m][n][1] > dp[m][n][0] else 0
+    state = 1 if scores[m][n][1] > scores[m][n][0] else 0
     aligned: set[int] = set()
-    ci, cj = m, n
-    while ci > 0 or cj > 0:
-        prev = back[ci][cj][state]
+    ai_idx, corr_idx = m, n
+    while ai_idx > 0 or corr_idx > 0:
+        prev = backpointers[ai_idx][corr_idx][state]
         if prev is None:
             break
-        pi, pj, pstate, stu_idx = prev
+        pi, pj, prev_state, stu_idx = prev
         if stu_idx >= 0:
             aligned.add(stu_idx)
-        ci, cj, state = pi, pj, pstate
+        ai_idx, corr_idx, state = pi, pj, prev_state
     return aligned
 
 

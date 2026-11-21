@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 _TASHKEEL_RE = re.compile(r"[\u064B-\u065F\u0670\u0640]")
-_CITATION_SPLIT_RE = re.compile(r'(\([^)]*\)|﴿[^﴾]*﴾|"[^"]*")')
+CITATION_SPAN_RE = re.compile(r'(\([^)]*\)|﴿[^﴾]*﴾|"[^"]*"|«[^»]*»)')
 _EDITORIAL_BRACKET_RE = re.compile(r"\[[^\]]*[\d٠-٩][^\]]*\]")
 _WHITESPACE_RE = re.compile(r"\s+")
 _TOKEN_SEP_RE = re.compile(r"[_\s]+")
@@ -18,7 +20,7 @@ _LETTER_FOLD_MAP = {**_HAMZA_MAP, "ة": "ه", "ى": "ي"}
 _HAMZA_TABLE = str.maketrans(_HAMZA_MAP)
 _LETTER_FOLD_TABLE = str.maketrans(_LETTER_FOLD_MAP)
 _CLOSING_DELIMITERS: dict[str, str] = {")": "(", "}": "{", "]": "[", "»": "«"}
-_CITATION_PAIRS: tuple[tuple[str, str], ...] = (("(", ")"), ("﴿", "﴾"), ('"', '"'))
+_CITATION_PAIRS: tuple[tuple[str, str], ...] = (("(", ")"), ("﴿", "﴾"), ('"', '"'), ("«", "»"))
 
 
 @dataclass(frozen=True)
@@ -71,12 +73,20 @@ def _is_preserved_citation(part: str) -> bool:
 
 
 def strip_tashkeel_preserving_citations(text: str) -> str:
-    """Strip diacritics from fallback prose while keeping parenthesized, ornate, and quoted citations verbatim."""
-    parts = _CITATION_SPLIT_RE.split(text)
+    """Strip diacritics from fallback prose while keeping parenthesized, ornate, quoted, and guillemet citations verbatim."""
+    parts = CITATION_SPAN_RE.split(text)
     return "".join(
         part if _is_preserved_citation(part) else strip_tashkeel(part)
         for part in parts
     )
+
+
+def mask_citations(
+    text: str,
+    replacement: str | Callable[[re.Match[str]], str] = " ",
+) -> str:
+    """Replace citation spans ((...), ﴿...﴾, "...", «...») using a string or match callback."""
+    return CITATION_SPAN_RE.sub(replacement, text)
 
 
 def collapse_whitespace(text: str) -> str:
@@ -84,6 +94,17 @@ def collapse_whitespace(text: str) -> str:
     if not text:
         return ""
     return _WHITESPACE_RE.sub(" ", text).strip()
+
+
+def normalize_nfc_collapsed(text: str) -> str:
+    """Collapse whitespace and normalize Unicode combining mark order to NFC."""
+    return unicodedata.normalize("NFC", collapse_whitespace(text))
+
+
+def normalize_dialect_markers(markers: Iterable[str]) -> frozenset[str]:
+    """Expand dialect markers with their diacritic-stripped and hamza-normalized forms."""
+    marker_set = set(markers)
+    return frozenset({normalize_arabic(strip_tashkeel(m)) for m in marker_set} | marker_set)
 
 
 def normalize_arabic(text: str) -> str:

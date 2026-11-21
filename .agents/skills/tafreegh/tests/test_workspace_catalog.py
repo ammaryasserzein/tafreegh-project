@@ -344,34 +344,61 @@ class TestRuleCatalogDialectAndAnonymization:
         assert cat_renamed.attendee_rules == baseline
         assert cat_renamed.attendee_rules.find_leaks("نعم يا معاذ؟")
 
+    @staticmethod
+    def _find_dialect_matches(catalog: RuleCatalog, text: str) -> list[tuple[str, str]]:
+        hits: list[tuple[str, str]] = []
+        for pat, target in catalog.dialect_replacements:
+            m = pat.search(text)
+            if m:
+                suggested = m.expand(target) if "\\" in target else target
+                hits.append((m.group(0), suggested))
+        return hits
+
     def test_dialect_rules_compile_multiword_spaced_negations_and_exempt_fused_clitics(self):
         catalog = RuleCatalog.load()
 
-        def _find_matches(text: str) -> list[tuple[str, str]]:
-            hits: list[tuple[str, str]] = []
-            for pat, target in catalog.dialect_replacements:
-                m = pat.search(text)
-                if m:
-                    suggested = m.expand(target) if "\\" in target else target
-                    hits.append((m.group(0), suggested))
-            return hits
-
         # Multi-word table entry 'علي طول' must compile with real \s+ whitespace matching
-        assert _find_matches("نبدأ علي طول هنا") == [("علي طول", "علطول")]
-        assert _find_matches("نبدأ علي  طول هنا") == [("علي  طول", "علطول")]
+        assert self._find_dialect_matches(catalog, "نبدأ علي طول هنا") == [("علي طول", "علطول")]
+        assert self._find_dialect_matches(catalog, "نبدأ علي  طول هنا") == [("علي  طول", "علطول")]
 
         # Both spaceless and space-separated forms of مفيش / مفيهوش must trigger
-        assert _find_matches("مافيش مشكلة") == [("مافيش", "مفيش")]
-        assert _find_matches("مافيهوش حاجة") == [("مافيهوش", "مفيهوش")]
-        assert _find_matches("ما فيش مشكلة") == [("ما فيش", "مفيش")]
-        assert _find_matches("ما فيهوش حاجة") == [("ما فيهوش", "مفيهوش")]
-        assert set(_find_matches("ما فيش مشكلة وما فيهوش حاجة")) == {
+        assert self._find_dialect_matches(catalog, "مافيش مشكلة") == [("مافيش", "مفيش")]
+        assert self._find_dialect_matches(catalog, "مافيهوش حاجة") == [("مافيهوش", "مفيهوش")]
+        assert self._find_dialect_matches(catalog, "ما فيش مشكلة") == [("ما فيش", "مفيش")]
+        assert self._find_dialect_matches(catalog, "ما فيهوش حاجة") == [("ما فيهوش", "مفيهوش")]
+        assert set(self._find_dialect_matches(catalog, "ما فيش مشكلة وما فيهوش حاجة")) == {
             ("ما فيش", "مفيش"),
             ("وما فيهوش", "ومفيهوش"),
         }
 
         # Expanded Fused Negation Particles must stay exempt from compound verb negation splitting
-        assert _find_matches("ماليش دعوة وماهوش موجود و ماهياش هنا") == []
+        assert self._find_dialect_matches(catalog, "ماليش دعوة وماهوش موجود و ماهياش هنا") == []
+
+    def test_dual_form_fused_negations_allow_both_spellings_and_flag_spaced_forms(self):
+        catalog = RuleCatalog.load()
+
+        for allowed in (
+            "ماليش",
+            "مليش",
+            "ماهوش",
+            "مهوش",
+            "ماهياش",
+            "مهياش",
+            "وماليش",
+            "ومليش",
+            "فماهوش",
+            "فمهوش",
+        ):
+            assert self._find_dialect_matches(catalog, f"هو {allowed} حاجة") == []
+
+        assert self._find_dialect_matches(catalog, "ما ليش دعوة") == [("ما ليش", "ماليش")]
+        assert self._find_dialect_matches(catalog, "ما هوش موجود") == [("ما هوش", "ماهوش")]
+        assert self._find_dialect_matches(catalog, "ما هياش هنا") == [("ما هياش", "ماهياش")]
+        assert self._find_dialect_matches(catalog, "ما فيش مشكلة") == [("ما فيش", "مفيش")]
+        assert self._find_dialect_matches(catalog, "ما فيهوش حاجة") == [("ما فيهوش", "مفيهوش")]
+        assert self._find_dialect_matches(catalog, "وما ليش دعوة") == [("وما ليش", "وماليش")]
+        assert self._find_dialect_matches(catalog, "وما هوش موجود") == [("وما هوش", "وماهوش")]
+        assert self._find_dialect_matches(catalog, "وما هياش هنا") == [("وما هياش", "وماهياش")]
 
     def test_attendee_rules_catch_extended_vocatives_clitics_titles_and_guard_companions(self):
         rules = RuleCatalog.load().attendee_rules
@@ -432,6 +459,39 @@ class TestRuleCatalogDialectAndAnonymization:
         assert custom_rules.find_leaks("قال الإمام أحمد") == []
         assert custom_rules.find_leaks("مسند أحمد") == []
         assert custom_rules.find_leaks("النبي يوسف قال") == []
+
+    def test_multiword_known_attendees_and_nominal_predicates(self):
+        rules = RuleCatalog.load().attendee_rules
+
+        for multi in (
+            "محمد جمال",
+            "محمد صلاح",
+            "محمد سالم",
+            "حسن جمال",
+            "أحمد عكاشة",
+            "محمد عاطف",
+        ):
+            assert multi in rules.known_attendee_names
+        assert "محمد" not in rules.known_attendee_names
+        assert "أحمد" not in rules.known_attendee_names
+        assert "حسن" not in rules.known_attendee_names
+
+        for leak_phrase in (
+            "محمد جمال قال كدا",
+            "أحمد عكاشة جه؟",
+            "معاذ شديد شوية",
+            "لؤي إنسان",
+            "يا محمد جمال",
+        ):
+            assert rules.find_leaks(leak_phrase), f"Expected leak for: {leak_phrase}"
+
+        for clean_phrase in (
+            "على نبينا محمد",
+            "الإمام أحمد قال",
+            "حديث حسن",
+            "سعد بن معاذ قال",
+        ):
+            assert rules.find_leaks(clean_phrase) == [], f"Unexpected leak for: {clean_phrase}"
 
 
 class TestZeroImportIoAndModulePurity:
