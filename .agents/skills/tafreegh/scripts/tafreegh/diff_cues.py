@@ -56,14 +56,117 @@ def _normalize_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+def _is_student_line(line: str) -> bool:
+    """Return True if the line is attributed to a student speaker."""
+    return line.strip().startswith("طالب:")
+
+
 def _find_preceding_sentence(lines: list[str], target_index: int) -> str:
     """Find the Sheikh's sentence immediately before the target line index."""
     for i in range(target_index - 1, -1, -1):
         line = lines[i].strip()
         # Skip empty lines and other student lines
-        if line and not line.startswith("طالب:"):
+        if line and not _is_student_line(line):
             return line
     return ""
+
+
+def _prose_similarity(ai_line: str, corr_line: str) -> tuple[float, float]:
+    """Return (ratio, containment) similarity metrics between two non-student lines."""
+    if not ai_line or not corr_line:
+        return 0.0, 0.0
+    matcher = SequenceMatcher(None, ai_line, corr_line)
+    matched = sum(block.size for block in matcher.get_matching_blocks())
+    ratio = (2.0 * matched) / (len(ai_line) + len(corr_line))
+    containment = matched / min(len(ai_line), len(corr_line))
+    return ratio, containment
+
+
+def _build_alignment_scores(
+    ai_slice: list[str], corr_slice: list[str]
+) -> tuple[list[bool], list[bool], list[list[float]], list[list[float]]]:
+    """Compute pairwise match and split-continuation scores for a replace hunk."""
+    m, n = len(ai_slice), len(corr_slice)
+    ai_is_stu = [_is_student_line(line) for line in ai_slice]
+    corr_is_stu = [_is_student_line(line) for line in corr_slice]
+    match_score: list[list[float]] = [[0.0] * n for _ in range(m)]
+    cont_score: list[list[float]] = [[0.0] * n for _ in range(m)]
+
+    for i in range(m):
+        for j in range(n):
+            if ai_is_stu[i] and corr_is_stu[j]:
+                ratio = SequenceMatcher(None, ai_slice[i], corr_slice[j]).ratio()
+                match_score[i][j] = 1.0 + 0.5 * ratio
+                continue
+            if ai_is_stu[i] or corr_is_stu[j]:
+                continue
+            ratio, containment = _prose_similarity(ai_slice[i], corr_slice[j])
+            if containment >= 0.6 or ratio >= 0.4:
+                match_score[i][j] = 3.0 * max(ratio, 0.7 * containment)
+                if containment >= 0.85 and len(corr_slice[j]) < len(ai_slice[i]):
+                    cont_score[i][j] = 1.5 * containment
+
+    return ai_is_stu, corr_is_stu, match_score, cont_score
+
+
+def _aligned_student_indices(ai_slice: list[str], corr_slice: list[str]) -> set[int]:
+    """Return local corr_slice indices whose student turns align to existing AI turns."""
+    m, n = len(ai_slice), len(corr_slice)
+    if m == 0 or n == 0 or not any(_is_student_line(line) for line in ai_slice):
+        return set()
+    if m * n > 25000:
+        ai_students = [idx for idx, line in enumerate(ai_slice) if _is_student_line(line)]
+        corr_students = [idx for idx, line in enumerate(corr_slice) if _is_student_line(line)]
+        return set(corr_students[: len(ai_students)])
+
+    ai_is_stu, corr_is_stu, match_score, cont_score = _build_alignment_scores(ai_slice, corr_slice)
+
+    # dp[i][j][active]: best score aligning ai_slice[:i] with corr_slice[:j];
+    # active=1 means ai_slice[i-1] was matched as a split prefix and can absorb trailing fragments.
+    neg_inf = float("-inf")
+    dp = [[[0.0, neg_inf] for _ in range(n + 1)] for _ in range(m + 1)]
+    back: list[list[list[tuple[int, int, int, int] | None]]] = [
+        [[None, None] for _ in range(n + 1)] for _ in range(m + 1)
+    ]
+
+    for i in range(m + 1):
+        for j in range(n + 1):
+            for active in (0, 1):
+                cur = dp[i][j][active]
+                if cur == neg_inf:
+                    continue
+                if i < m and cur > dp[i + 1][j][0]:
+                    dp[i + 1][j][0] = cur
+                    back[i + 1][j][0] = (i, j, active, -1)
+                if j < n and cur > dp[i][j + 1][active]:
+                    dp[i][j + 1][active] = cur
+                    back[i][j + 1][active] = (i, j, active, -1)
+                if i < m and j < n and match_score[i][j] > 0.0:
+                    is_split_prefix = (not ai_is_stu[i]) and (len(corr_slice[j]) < len(ai_slice[i]))
+                    next_active = 1 if is_split_prefix else 0
+                    cand = cur + match_score[i][j]
+                    if cand > dp[i + 1][j + 1][next_active]:
+                        dp[i + 1][j + 1][next_active] = cand
+                        aligned_stu = j if (ai_is_stu[i] and corr_is_stu[j]) else -1
+                        back[i + 1][j + 1][next_active] = (i, j, active, aligned_stu)
+                if active == 1 and i > 0 and j < n and cont_score[i - 1][j] > 0.0:
+                    cand = cur + cont_score[i - 1][j]
+                    if cand > dp[i][j + 1][1]:
+                        dp[i][j + 1][1] = cand
+                        back[i][j + 1][1] = (i, j, active, -1)
+
+    state = 1 if dp[m][n][1] > dp[m][n][0] else 0
+    aligned: set[int] = set()
+    ci, cj = m, n
+    while ci > 0 or cj > 0:
+        prev = back[ci][cj][state]
+        if prev is None:
+            break
+        pi, pj, pstate, stu_idx = prev
+        if stu_idx >= 0:
+            aligned.add(stu_idx)
+        ci, cj, state = pi, pj, pstate
+    return aligned
 
 
 @dataclass
@@ -74,11 +177,17 @@ class CueResult:
     removed: list[CueCandidate] = field(default_factory=list)
 
 def _collect_cues(
-    normalized_lines: list[str], raw_text: str, start_idx: int, end_idx: int
+    normalized_lines: list[str],
+    raw_text: str,
+    start_idx: int,
+    end_idx: int,
+    skip_indices: set[int] | None = None,
 ) -> list[CueCandidate]:
     """Helper to collect cues from a range of normalized lines."""
     candidates = []
     for idx in range(start_idx, end_idx):
+        if skip_indices and idx in skip_indices:
+            continue
         line = normalized_lines[idx]
         if _is_full_inaudible_student_line(line):
             cue = _find_preceding_sentence(normalized_lines, idx)
@@ -117,9 +226,15 @@ def detect_new_student_cues(
     removed_candidates: list[CueCandidate] = []
 
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag in ("insert", "replace"):
+        if tag == "insert":
             inserted_candidates.extend(_collect_cues(corrected_lines, corrected_text, j1, j2))
-        
+        elif tag == "replace":
+            aligned_local = _aligned_student_indices(ai_lines[i1:i2], corrected_lines[j1:j2])
+            skip_global = {j1 + local_idx for local_idx in aligned_local}
+            inserted_candidates.extend(
+                _collect_cues(corrected_lines, corrected_text, j1, j2, skip_indices=skip_global)
+            )
+
         if tag in ("delete", "replace"):
             removed_candidates.extend(_collect_cues(ai_lines, ai_text, i1, i2))
 

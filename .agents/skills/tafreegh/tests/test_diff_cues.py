@@ -156,3 +156,66 @@ class TestDetectNewStudentCues:
         report = format_cue_report(result)
         assert "مرشحات تنبيهات محادثة جديدة" in report
         assert "تنبيهات محذوفة من قبل المستخدم" in report
+
+    def test_suppresses_inaudible_replacing_existing_ai_student_turn(self):
+        ai_text = (
+            "هذا الكلام واضح؟\n\n"
+            "طالب: أي حاجة.\n\n"
+            "نكمل الدرس."
+        )
+        corrected_text = (
+            "هذا الكلام واضح؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "نكمل الدرس."
+        )
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert result.inserted == []
+        assert result.removed == []
+
+    def test_suppresses_echoed_turn_replaced_by_inaudible_in_wider_hunk(self):
+        ai_text = (
+            "ولما يعجز.\n\n"
+            "طالب: هيسرقك.\n\n"
+            "هيحسدك وهيسرقك."
+        )
+        corrected_text = (
+            "ولما يعجز.\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "هيسرقك، هيحسدك وهيسرقك."
+        )
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert result.inserted == []
+
+    def test_aligns_replaced_and_brand_new_turns_within_same_replace_hunk(self):
+        ai_text = (
+            "سؤال أول؟ تكملة أولى.\n\n"
+            "طالب: كلام غلط.\n\n"
+            "نهاية الدرس."
+        )
+        corrected_text = (
+            "سؤال أول؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "تكملة أولى.\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "نهاية الدرس."
+        )
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert len(result.inserted) == 1
+        assert result.inserted[0]["cue_sentence"] == "سؤال أول؟"
+
+    def test_merged_echoed_turn_does_not_mask_later_brand_new_inaudible_in_same_hunk(self):
+        ai_text = (
+            "السؤال الأول؟\n\n"
+            "طالب: كلام الشيخ.\n\n"
+            "السؤال الثاني؟ باقي الكلام."
+        )
+        corrected_text = (
+            "السؤال الأول؟ كلام الشيخ.\n\n"
+            "السؤال الثاني؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "باقي الكلام."
+        )
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert len(result.inserted) == 1
+        assert result.inserted[0]["cue_sentence"] == "السؤال الثاني؟"
+

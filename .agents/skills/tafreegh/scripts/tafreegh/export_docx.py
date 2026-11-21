@@ -15,6 +15,7 @@ from .matn_matcher import (
     MatchMode,
     MatnMatchResult,
     SequentialMatnMatcher,
+    collapse_linebreaks,
     generate_fallback_summary,
 )
 from .workspace_catalog import RuleCatalog, WorkspaceConfig, resolve_runtime_context
@@ -42,8 +43,21 @@ class PublicationOutcome(TypedDict):
     matcher: SequentialMatnMatcher | None
 
 
+_THOUSANDS_STEM = {"1": "ألف", "2": "ألفين"}
+_PREFIX_THOUSANDS_RE = re.compile(
+    r"\b(?:(?P<ba>[وف]?)بـ|(?P<al>[وفكب]?)الـ|(?P<bare_al>ال))\s*(?P<num>1|2)000\b"
+)
+
+
 def format_thousands(text: str) -> str:
-    """Formats numbers like 30000 to 30 ألف and 5000 to 5 آلاف."""
+    """Formats numbers like 30000 to 30 ألف, 5000 to 5 آلاف, and prefixed 1000/2000 forms."""
+
+    def prefix_replacer(match: re.Match[str]) -> str:
+        stem = _THOUSANDS_STEM[match.group("num")]
+        if match.group("ba") is not None:
+            return f"{match.group('ba')}ب{stem}"
+        prefix = match.group("al") or ""
+        return f"{prefix}ال{stem}"
 
     def replacer(match: re.Match[str]) -> str:
         num = int(match.group(1))
@@ -55,7 +69,8 @@ def format_thousands(text: str) -> str:
             return "ألفين"
         return f"{num} ألف"
 
-    return re.sub(r"\b(\d+)000\b", replacer, text)
+    formatted = _PREFIX_THOUSANDS_RE.sub(prefix_replacer, text)
+    return re.sub(r"\b(\d+)000\b", replacer, formatted)
 
 
 def archive_processed_inputs(
@@ -179,11 +194,24 @@ class _CandidateItem:
 
 
 def _extract_candidate_query(inner_text: str) -> str:
-    """Strips outer parentheses if present from inner matn text."""
+    """Strips outer parentheses (and optional trailing period) only when opening '(' pairs with the final ')'."""
     inner = inner_text.strip()
-    if inner.startswith("(") and inner.endswith(")"):
-        return inner[1:-1].strip()
-    return inner
+    if not inner.startswith("("):
+        return inner
+    candidate = inner[:-1] if inner.endswith(").") else inner
+    if len(candidate) < 2 or not candidate.endswith(")"):
+        return inner
+    depth = 0
+    for idx, ch in enumerate(candidate):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if idx < len(candidate) - 1 and depth <= 0:
+            return inner
+    if depth != 0:
+        return inner
+    return candidate[1:-1].strip()
 
 
 def _is_verified_segment(res: MatnMatchResult, catalog: RuleCatalog) -> bool:
@@ -195,7 +223,7 @@ def _is_verified_segment(res: MatnMatchResult, catalog: RuleCatalog) -> bool:
 
 def _format_standalone_segment(res: MatnMatchResult, catalog: RuleCatalog) -> list[str]:
     """Formats a standalone Matn paragraph line for markdown output."""
-    clean_text = res.text.strip()
+    clean_text = collapse_linebreaks(res.text.strip())
     if res.mode == MatchMode.PRIMARY:
         return [f"**({clean_text})**"]
     if _is_verified_segment(res, catalog):
@@ -205,7 +233,7 @@ def _format_standalone_segment(res: MatnMatchResult, catalog: RuleCatalog) -> li
 
 def _format_inline_segment(res: MatnMatchResult, catalog: RuleCatalog) -> str:
     """Formats an inline Matn span for markdown output."""
-    clean_text = res.text.strip()
+    clean_text = collapse_linebreaks(res.text.strip())
     if res.mode == MatchMode.PRIMARY:
         return f"**({clean_text})**"
     if _is_verified_segment(res, catalog):

@@ -6,7 +6,8 @@ import re
 from dataclasses import dataclass
 
 _TASHKEEL_RE = re.compile(r"[\u064B-\u065F\u0670\u0640]")
-_CITATION_SPLIT_RE = re.compile(r"(\([^)]+\))")
+_CITATION_SPLIT_RE = re.compile(r'(\([^)]*\)|﴿[^﴾]*﴾|"[^"]*")')
+_EDITORIAL_BRACKET_RE = re.compile(r"\[[^\]]*[\d٠-٩][^\]]*\]")
 _WHITESPACE_RE = re.compile(r"\s+")
 _TOKEN_SEP_RE = re.compile(r"[_\s]+")
 _NON_WORD_RE = re.compile(r"[^\w\s]")
@@ -17,6 +18,7 @@ _LETTER_FOLD_MAP = {**_HAMZA_MAP, "ة": "ه", "ى": "ي"}
 _HAMZA_TABLE = str.maketrans(_HAMZA_MAP)
 _LETTER_FOLD_TABLE = str.maketrans(_LETTER_FOLD_MAP)
 _CLOSING_DELIMITERS: dict[str, str] = {")": "(", "}": "{", "]": "[", "»": "«"}
+_CITATION_PAIRS: tuple[tuple[str, str], ...] = (("(", ")"), ("﴿", "﴾"), ('"', '"'))
 
 
 @dataclass(frozen=True)
@@ -63,11 +65,16 @@ def has_tashkeel(text: str) -> bool:
     return bool(_TASHKEEL_RE.search(text))
 
 
+def _is_preserved_citation(part: str) -> bool:
+    """Return True when part is a non-empty citation enclosed in matching citation delimiters."""
+    return len(part) >= 2 and any(part.startswith(opener) and part.endswith(closer) for opener, closer in _CITATION_PAIRS)
+
+
 def strip_tashkeel_preserving_citations(text: str) -> str:
-    """Strip diacritics from fallback prose while keeping parenthesized citations verbatim."""
+    """Strip diacritics from fallback prose while keeping parenthesized, ornate, and quoted citations verbatim."""
     parts = _CITATION_SPLIT_RE.split(text)
     return "".join(
-        part if (part.startswith("(") and part.endswith(")")) else strip_tashkeel(part)
+        part if _is_preserved_citation(part) else strip_tashkeel(part)
         for part in parts
     )
 
@@ -95,10 +102,11 @@ def normalize_arabic_token(text: str) -> str:
 
 
 def normalize_arabic_search(text: str) -> str:
-    """Canonicalize Arabic text for tolerant substring matching across diacritics, letters, and punctuation."""
+    """Canonicalize Arabic text for tolerant substring matching across diacritics, letters, punctuation, and editorial digit brackets."""
     if not text:
         return ""
-    folded = strip_tashkeel(text).translate(_LETTER_FOLD_TABLE)
+    without_editorial = _EDITORIAL_BRACKET_RE.sub(" ", text)
+    folded = strip_tashkeel(without_editorial).translate(_LETTER_FOLD_TABLE)
     cleaned = _NON_WORD_RE.sub(" ", folded)
     return _WHITESPACE_RE.sub(" ", cleaned).strip()
 
@@ -108,23 +116,35 @@ def build_search_index(source: str) -> IndexedArabicText:
     norm_chars: list[str] = []
     pos_map: list[int] = []
     prev_was_space = False
+    skip_spans = [(m.start(), m.end()) for m in _EDITORIAL_BRACKET_RE.finditer(source)]
+    skip_idx = 0
+    idx = 0
+    source_len = len(source)
 
-    for idx, ch in enumerate(source):
-        if _TASHKEEL_RE.match(ch):
-            continue
-
-        norm_c = _LETTER_FOLD_MAP.get(ch, ch)
-        if norm_c.isspace() or _NON_WORD_RE.match(norm_c):
+    while idx < source_len:
+        if skip_idx < len(skip_spans) and idx == skip_spans[skip_idx][0]:
             norm_c = " "
+            step_idx = idx
+            idx = skip_spans[skip_idx][1]
+            skip_idx += 1
+        else:
+            ch = source[idx]
+            step_idx = idx
+            idx += 1
+            if _TASHKEEL_RE.match(ch):
+                continue
+            norm_c = _LETTER_FOLD_MAP.get(ch, ch)
+            if norm_c.isspace() or _NON_WORD_RE.match(norm_c):
+                norm_c = " "
 
         if norm_c == " ":
             if not prev_was_space and norm_chars:
                 norm_chars.append(" ")
-                pos_map.append(idx)
+                pos_map.append(step_idx)
                 prev_was_space = True
         else:
             norm_chars.append(norm_c)
-            pos_map.append(idx)
+            pos_map.append(step_idx)
             prev_was_space = False
 
     if norm_chars and norm_chars[-1] == " ":

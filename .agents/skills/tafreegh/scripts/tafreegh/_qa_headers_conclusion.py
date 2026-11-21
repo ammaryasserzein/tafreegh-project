@@ -30,19 +30,22 @@ LEAKED_METADATA_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+_QURAN_ASTERISK_CONTAINER_RE = re.compile(r"﴿([^﴾]+)﴾|\(([^()]+)\)")
+
+
 def _has_illegal_asterisk(stripped: str) -> bool:
-    """Return True if stripped contains '*' outside a spaced, vowelized parenthesized Quranic citation '(آية * آية)'."""
+    """Return True if stripped contains '*' outside a spaced, vowelized Quranic citation '(آية * آية)' or '﴿آية * آية﴾'."""
     if "*" not in stripped:
         return False
     if "**" in stripped:
         return True
 
-    outside = re.sub(r"\([^()]+\)", "", stripped)
+    outside = _QURAN_ASTERISK_CONTAINER_RE.sub("", stripped)
     if "*" in outside:
         return True
 
-    for m in re.finditer(r"\(([^()]+)\)", stripped):
-        inner = m.group(1)
+    for m in _QURAN_ASTERISK_CONTAINER_RE.finditer(stripped):
+        inner = m.group(1) if m.group(1) is not None else m.group(2)
         if "*" not in inner:
             continue
         if re.search(r"(?<! )\*|\*(?! )", inner):

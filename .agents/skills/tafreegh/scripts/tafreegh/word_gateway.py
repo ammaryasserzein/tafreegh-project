@@ -39,6 +39,10 @@ _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
 _HTML_COMMENT_INLINE_RE = re.compile(r"<!--.*?-->\s*")
 _BOLD_BLOCK_RE = re.compile(r"^\*\*(.+)\*\*$", re.DOTALL)
 _BOLD_SPAN_RE = re.compile(r"(\*\*[^*]+\*\*)")
+_MD_BLOCKQUOTE_RE = re.compile(r"^[ \t]*(?:>[ \t]*)+", re.MULTILINE)
+_MD_HEADING_RE = re.compile(r"^[ \t]*#{1,6}[ \t]+", re.MULTILINE)
+_MD_BOLD_WRAPPER_RE = re.compile(r"\*\*((?:(?!\n\n).)+?)\*\*", re.DOTALL)
+_MD_ITALIC_WRAPPER_RE = re.compile(r"(?<!\*)\*(?!\s|\*)([^\n*]*?[^\s*])\*(?!\*)")
 _T = TypeVar("_T")
 _ARCHIVE_READ_ERRORS = (
     OSError,
@@ -181,13 +185,21 @@ def strip_hybrid_summary(markdown_text: str) -> str:
     return markdown_text
 
 
+def _strip_markdown_matn_wrappers(text: str) -> str:
+    """Strips structural Markdown bold/italic/heading/quote wrappers while preserving spaced Quranic ' * '."""
+    cleaned = _MD_BLOCKQUOTE_RE.sub("", text)
+    cleaned = _MD_HEADING_RE.sub("", cleaned)
+    cleaned = _MD_BOLD_WRAPPER_RE.sub(r"\1", cleaned)
+    return _MD_ITALIC_WRAPPER_RE.sub(r"\1", cleaned)
+
+
 def read_matn_source_content(path: Path | str) -> str:
     """Reads canonical Matn source content from a .docx or text/markdown file."""
     target = Path(path)
     if target.suffix.lower() == ".docx":
         doc = _open_docx_document(target)
         return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-    return target.read_text(encoding="utf-8")
+    return _strip_markdown_matn_wrappers(target.read_text(encoding="utf-8"))
 
 
 def _ensure_child(parent: object, tag_name: str) -> object:
@@ -263,17 +275,19 @@ def _append_mixed_line_paragraph(doc: docx.document.Document, line: str) -> None
             continue
         if part.startswith("**") and part.endswith("**"):
             run = paragraph.add_run(part[2:-2])
-            _set_run_font(run, bold=False)
+            _set_run_font(run, bold=True)
         elif part.startswith("طالب:"):
             run_label = paragraph.add_run("طالب: ")
             _set_run_font(run_label, bold=False)
-            rest_text = part[len("طالب:") :].strip()
+            rest_text = part[len("طالب:") :].lstrip().replace("**", "")
             if rest_text:
                 run_rest = paragraph.add_run(rest_text)
                 _set_run_font(run_rest, bold=False)
         else:
-            run = paragraph.add_run(part)
-            _set_run_font(run, bold=False)
+            clean_part = part.replace("**", "")
+            if clean_part:
+                run = paragraph.add_run(clean_part)
+                _set_run_font(run, bold=False)
 
 
 def create_docx(
@@ -323,7 +337,7 @@ def create_docx(
     for lines in lecture_identity.strip_header_blocks(sanitized):
         cleaned_para = "\n".join(lines)
         para_matn_match = _BOLD_BLOCK_RE.match(cleaned_para)
-        if para_matn_match and not _BOLD_SPAN_RE.search(para_matn_match.group(1)):
+        if para_matn_match and "**" not in para_matn_match.group(1):
             matn_content = " ".join(
                 ln.strip() for ln in para_matn_match.group(1).split("\n") if ln.strip()
             )
@@ -340,7 +354,7 @@ def create_docx(
                 continue
 
             matn_line_match = _BOLD_BLOCK_RE.match(cleaned_line)
-            if matn_line_match:
+            if matn_line_match and "**" not in matn_line_match.group(1):
                 _add_styled_paragraph(doc, matn_line_match.group(1), bold=True)
                 continue
 

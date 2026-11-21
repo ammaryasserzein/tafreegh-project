@@ -1,6 +1,7 @@
 import unittest
 
 from tafreegh.matn_matcher import (
+    COMPOUND_SHARH_SPLIT_RE,
     MatchMode,
     MatnCursorSnapshot,
     SequentialMatnMatcher,
@@ -359,6 +360,66 @@ class TestMatnMatcher(unittest.TestCase):
         res_guillemet = matcher.match_segment("وذكر مسألة نافعة")
         self.assertEqual(res_guillemet.mode, MatchMode.PRIMARY)
         self.assertEqual(res_guillemet.text, "وَذَكَرَ: «مَسْأَلَةً نَافِعَةً»")
+
+    def test_multiline_matn_source_collapses_internal_newlines_in_result_and_format(self):
+        source = "إِنَّ مَبَادِئَ\n\nكُلِّ عِلْمٍ عَشَرَهْ\r\n\r\nالحَدُّ وَالمَوْضُوعُ"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+
+        res1 = matcher.match_segment("ان مبادئ كل علم عشره")
+        self.assertEqual(res1.mode, MatchMode.PRIMARY)
+        self.assertNotIn("\n", res1.text)
+        self.assertNotIn("\r", res1.text)
+        self.assertEqual(res1.text, "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ")
+        self.assertEqual(format_matn_segment(res1), "**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**")
+
+    def test_match_segment_skips_editorial_digit_brackets_and_retains_them_in_primary_output(self):
+        source = "قَالَ {بَدِيعُ} [البقرة: 117] وَقَالَ: [1] خُلِقَ"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+        res = matcher.match_segment("قال بديع وقال خلق")
+        self.assertEqual(res.mode, MatchMode.PRIMARY)
+        self.assertEqual(res.text, "قَالَ {بَدِيعُ} [البقرة: 117] وَقَالَ: [1] خُلِقَ")
+
+    def test_contains_verbatim_normalizes_nfc_combining_order(self):
+        source = "إِنَّ \u0627\u0644\u0644\u0651\u064e\u0647\u064e غَفُورٌ ... \u0631\u064e\u0628\u0651\u064e\u0646\u064e\u0627"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=50)
+        word_ordered = "إِنَّ \u0627\u0644\u0644\u064e\u0651\u0647\u064e غَفُورٌ"
+        self.assertTrue(matcher.contains_verbatim(word_ordered))
+        self.assertTrue(matcher.advance_to_canonical_occurrence("\u0631\u064e\u0628\u064e\u0651\u0646\u064e\u0627"))
+
+    def test_match_segment_retains_trailing_punctuation_when_query_explicitly_punctuated(self):
+        source = "مِنْ آدَابِ الْعِلْمِ بِالاِسْمِ وَآثَارِهِ: النَّظَرُ فِي مُبْدَعَاتِهِ!"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+
+        res_colon = matcher.match_segment("من اداب العلم بالاسم واثاره:")
+        self.assertEqual(res_colon.mode, MatchMode.PRIMARY)
+        self.assertEqual(res_colon.text, "مِنْ آدَابِ الْعِلْمِ بِالاِسْمِ وَآثَارِهِ:")
+        self.assertEqual(source[res_colon.start_pos : res_colon.end_pos], res_colon.text)
+
+        res_plain = matcher.match_segment("النظر في مبدعاته")
+        self.assertEqual(res_plain.mode, MatchMode.PRIMARY)
+        self.assertEqual(res_plain.text, "النَّظَرُ فِي مُبْدَعَاتِهِ")
+
+    def test_expanded_compound_sharh_lead_ins_anchor_to_primary_tail(self):
+        source = (
+            "أَأَنْثُرُ دُرًّا بَيْنَ سَارِحَةِ الْبَهْمِ ... "
+            "وَهَذِهِ هِيَ قَاعِدَةُ الْمَذْهَبِ ... "
+            "كَمَا بَيَّنَ ذَلِكَ الشَّارِحُ"
+        )
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+
+        r1 = matcher.match_segment("ثم أنشد قائلًا: أأنثر درا بين سارحة البهم")
+        self.assertTrue(r1.is_source_anchored)
+        self.assertEqual(r1.text, "ثم أنشد قائلا: أَأَنْثُرُ دُرًّا بَيْنَ سَارِحَةِ الْبَهْمِ")
+
+        r2 = matcher.match_segment("قال الشيخ العثيمين: وهذه هي قاعدة المذهب")
+        self.assertTrue(r2.is_source_anchored)
+        self.assertEqual(r2.text, "قال الشيخ العثيمين: وَهَذِهِ هِيَ قَاعِدَةُ الْمَذْهَبِ")
+
+        r3 = matcher.match_segment("لقوله تعالى: كما بين ذلك الشارح")
+        self.assertTrue(r3.is_source_anchored)
+        self.assertEqual(r3.text, "لقوله تعالى: كَمَا بَيَّنَ ذَلِكَ الشَّارِحُ")
+
+        self.assertIsNotNone(COMPOUND_SHARH_SPLIT_RE.match("ثم أنشد قائلًا: أَأَنْثُرُ"))
 
 
 if __name__ == "__main__":

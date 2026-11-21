@@ -12,6 +12,7 @@ Implements ADR 0002:
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 
@@ -54,11 +55,24 @@ class MatnCursorSnapshot:
 
 
 COMPOUND_SHARH_SPLIT_RE = re.compile(
-    r"^(.+?(?:بقوله|في قوله|قوله)\s*[،:]\s*)(.+)$"
+    r"^((?:.*?\s)?(?:[وفك]?(?:بقوله|في قوله|قوله|لقوله(?:\s+[^:،\n]{1,35})?|(?:قال|يقول)\s+(?:الشيخ|الإمام|المصنف|ابن|أبو|القاضي|الحافظ)\s+[^:،\n]{1,35})|ثم\s+أنشد\s+قائل\u064B?ا\u064B?)\s*[،:]\s*)(.+)$"
 )
 
-
+_LINEBREAK_RUN_RE = re.compile(r"[ \t]*(?:\r?\n|\r)+[ \t]*")
+_TRAILING_PUNCT_CHARS = frozenset("،.:!؟")
 _collapse_whitespace = collapse_whitespace
+
+
+def _normalize_nfc_collapsed(text: str) -> str:
+    """Collapse whitespace and normalize Unicode combining mark order to NFC."""
+    return unicodedata.normalize("NFC", _collapse_whitespace(text))
+
+
+def collapse_linebreaks(text: str) -> str:
+    """Collapse internal line breaks and surrounding horizontal whitespace into single spaces."""
+    if "\n" not in text and "\r" not in text:
+        return text
+    return _LINEBREAK_RUN_RE.sub(" ", text).strip()
 
 
 class SequentialMatnMatcher:
@@ -71,7 +85,7 @@ class SequentialMatnMatcher:
         self.history: list[MatnMatchResult] = []
 
         self._search_index = build_search_index(self.source)
-        self._collapsed_source = _collapse_whitespace(self.source)
+        self._collapsed_source = _normalize_nfc_collapsed(self.source)
 
     @property
     def cursor(self) -> int:
@@ -102,8 +116,8 @@ class SequentialMatnMatcher:
         return search_start, window_end
 
     def contains_verbatim(self, text: str) -> bool:
-        """Returns True when whitespace-collapsed text appears verbatim in canonical Matn source."""
-        collapsed = _collapse_whitespace(text)
+        """Returns True when whitespace-collapsed NFC text appears verbatim in canonical Matn source."""
+        collapsed = _normalize_nfc_collapsed(text)
         return bool(collapsed and collapsed in self._collapsed_source)
 
     def contains_normalized(self, text: str) -> bool:
@@ -113,7 +127,7 @@ class SequentialMatnMatcher:
 
     def advance_to_canonical_occurrence(self, text: str) -> bool:
         """Advances cursor to the next canonical verbatim occurrence ahead of cursor; returns True if moved."""
-        collapsed = _collapse_whitespace(text)
+        collapsed = _normalize_nfc_collapsed(text)
         norm_q = normalize_arabic_search(text)
         if not collapsed or not norm_q:
             return False
@@ -129,7 +143,7 @@ class SequentialMatnMatcher:
             pad = max(4, len(collapsed) - len(canon_slice) + 4)
             lo = max(0, orig_start - pad)
             hi = min(len(self.source), orig_end + pad)
-            if collapsed in _collapse_whitespace(self.source[lo:hi]):
+            if collapsed in _normalize_nfc_collapsed(self.source[lo:hi]):
                 self._cursor_norm = norm_end
                 self._active_norm_pos = norm_end
                 self._cursor = orig_end
@@ -146,13 +160,20 @@ class SequentialMatnMatcher:
         is_fallback: bool,
         is_re_read: bool,
         prefix: str = "",
+        spoken_segment: str = "",
     ) -> MatnMatchResult:
         """Extracts canonical slice, advances cursor when forward, records history, and returns result."""
         orig_start, orig_end, canon_slice = self._search_index.extract_span(norm_start, norm_end)
+        trailing = spoken_segment.rstrip()
+        if trailing and trailing[-1] in _TRAILING_PUNCT_CHARS:
+            if orig_end < len(self.source) and self.source[orig_end] == trailing[-1]:
+                orig_end += 1
+                canon_slice = self.source[orig_start:orig_end]
         self._active_norm_pos = norm_end
         if not is_re_read:
             self._cursor_norm = norm_end
             self._cursor = orig_end
+        canon_slice = collapse_linebreaks(canon_slice)
         res = MatnMatchResult(
             mode=mode,
             text=f"{prefix}{canon_slice}",
@@ -228,6 +249,7 @@ class SequentialMatnMatcher:
                 is_fallback=True,
                 is_re_read=norm_end <= self._cursor_norm,
                 prefix=sharh_prefix,
+                spoken_segment=spoken_segment,
             )
 
         # Multi-word tail: standard forward window then look-behind
@@ -241,6 +263,7 @@ class SequentialMatnMatcher:
                 is_fallback=True,
                 is_re_read=False,
                 prefix=sharh_prefix,
+                spoken_segment=spoken_segment,
             )
 
         idx_behind = self._find_whole_word(0, self._cursor_norm, tail_query, reverse=True)
@@ -252,6 +275,7 @@ class SequentialMatnMatcher:
                 is_fallback=True,
                 is_re_read=True,
                 prefix=sharh_prefix,
+                spoken_segment=spoken_segment,
             )
 
         return None
@@ -296,6 +320,7 @@ class SequentialMatnMatcher:
                     mode=MatchMode.PRIMARY,
                     is_fallback=False,
                     is_re_read=False,
+                    spoken_segment=spoken_segment,
                 )
 
         # 2. Look-behind search (0 -> cursor_norm)
@@ -308,6 +333,7 @@ class SequentialMatnMatcher:
                 mode=MatchMode.PRIMARY,
                 is_fallback=False,
                 is_re_read=True,
+                spoken_segment=spoken_segment,
             )
 
         # 3. Compound Sharh prefix + Primary Matn tail (e.g. 'ثم بين وجه ذلك بقوله، وَذَلِكَ')
@@ -337,7 +363,7 @@ class SequentialMatnMatcher:
 
 def format_matn_segment(result: MatnMatchResult) -> str:
     """Formats matn segment for intermediate markdown."""
-    clean_text = result.text.strip()
+    clean_text = collapse_linebreaks(result.text.strip())
     if result.is_fallback:
         return f"<!-- fallback -->\n**({clean_text})**"
     return f"**({clean_text})**"

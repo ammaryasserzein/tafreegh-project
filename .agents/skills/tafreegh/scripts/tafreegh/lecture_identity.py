@@ -35,9 +35,14 @@ def sanitize_filename_token(value: str) -> str:
     return _UNSAFE_FILENAME_CHARS_RE.sub("", value).strip().replace(" ", "_")
 
 
+def _clean_bom_line(line: str) -> str:
+    """Strip surrounding whitespace and any leading UTF-8 BOM from a line."""
+    return line.strip().lstrip("\ufeff").strip()
+
+
 def is_header_line(line: str) -> bool:
     """Checks if a given line belongs to the standard header block or NotebookLM tags."""
-    stripped = line.strip()
+    stripped = _clean_bom_line(line)
     if not stripped:
         return True
     if stripped in ("بسم الله الرحمن الرحيم", "بسم الله الرحمن الرحيم."):
@@ -245,6 +250,7 @@ class LectureIdentity:
         Extracts date, keyword, audio_file, clean canonical subject_name,
         and lecture_number from markdown text, filenames, or raw transcript headers.
         """
+        text = text.lstrip("\ufeff")
         rm = routing_map if routing_map is not None else {}
         date: str | None = None
         lecture_number: str | None = None
@@ -392,7 +398,7 @@ def resolve_document_identity(
     prioritizes numbered lecture formatting over parsed text dates without mutating instances,
     and clears stale lower-precedence stems when naming fields are overridden.
     """
-    resolved = LectureIdentity.from_text(markdown_text, routing_map=routing_map)
+    resolved = LectureIdentity.from_text(markdown_text.lstrip("\ufeff"), routing_map=routing_map)
     for layer in (path_identity, identity):
         if layer is None:
             continue
@@ -423,8 +429,8 @@ def strip_header_blocks(markdown_text: str) -> list[list[str]]:
     returning non-empty cleaned line lists per paragraph.
     """
     blocks: list[list[str]] = []
-    for para in markdown_text.split('\n\n'):
-        lines = [line.strip() for line in para.split('\n') if line.strip()]
+    for para in markdown_text.lstrip("\ufeff").split('\n\n'):
+        lines = [cleaned for line in para.split('\n') if (cleaned := _clean_bom_line(line))]
         if not lines or all(is_header_line(line) for line in lines):
             continue
         while lines and is_header_line(lines[0]):

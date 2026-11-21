@@ -344,6 +344,95 @@ class TestRuleCatalogDialectAndAnonymization:
         assert cat_renamed.attendee_rules == baseline
         assert cat_renamed.attendee_rules.find_leaks("نعم يا معاذ؟")
 
+    def test_dialect_rules_compile_multiword_spaced_negations_and_exempt_fused_clitics(self):
+        catalog = RuleCatalog.load()
+
+        def _find_matches(text: str) -> list[tuple[str, str]]:
+            hits: list[tuple[str, str]] = []
+            for pat, target in catalog.dialect_replacements:
+                m = pat.search(text)
+                if m:
+                    suggested = m.expand(target) if "\\" in target else target
+                    hits.append((m.group(0), suggested))
+            return hits
+
+        # Multi-word table entry 'علي طول' must compile with real \s+ whitespace matching
+        assert _find_matches("نبدأ علي طول هنا") == [("علي طول", "علطول")]
+        assert _find_matches("نبدأ علي  طول هنا") == [("علي  طول", "علطول")]
+
+        # Both spaceless and space-separated forms of مفيش / مفيهوش must trigger
+        assert _find_matches("مافيش مشكلة") == [("مافيش", "مفيش")]
+        assert _find_matches("مافيهوش حاجة") == [("مافيهوش", "مفيهوش")]
+        assert _find_matches("ما فيش مشكلة") == [("ما فيش", "مفيش")]
+        assert _find_matches("ما فيهوش حاجة") == [("ما فيهوش", "مفيهوش")]
+        assert set(_find_matches("ما فيش مشكلة وما فيهوش حاجة")) == {
+            ("ما فيش", "مفيش"),
+            ("وما فيهوش", "ومفيهوش"),
+        }
+
+        # Expanded Fused Negation Particles must stay exempt from compound verb negation splitting
+        assert _find_matches("ماليش دعوة وماهوش موجود و ماهياش هنا") == []
+
+    def test_attendee_rules_catch_extended_vocatives_clitics_titles_and_guard_companions(self):
+        rules = RuleCatalog.load().attendee_rules
+        assert rules.exempt_names == frozenset({"زيد", "عمرو", "بكر", "هند", "جحا", "إبراهيم"})
+        assert {"يعني", "طيب", "بقى"}.issubset(rules.vocative_stopwords)
+
+        # Extended vocative triggers and clause-final vocatives
+        for phrase in (
+            "خد يا معاذ",
+            "خذ يا طارق",
+            "اديله يا سعيد",
+            "وصل يا سعيد",
+            "لمين يا سعيد؟",
+            "أخبارك إيه يا سعيد؟",
+            "اصبر يا سعيد!",
+        ):
+            assert rules.find_leaks(phrase), f"Expected vocative leak for: {phrase}"
+
+        # Extended known_attendee_names patterns (clitics, الشيخ, أبو, bare student intro)
+        for phrase in (
+            "أنا ولؤي شركاء وهنبيعها لطارق",
+            "ولؤي بيعمل إيه دلوقتي؟",
+            "الشيخ طارق قال حاجة",
+            "أبو معاذ وصل",
+            "طالب: معاذ.",
+        ):
+            assert rules.find_leaks(phrase), f"Expected known-attendee leak for: {phrase}"
+
+        clitic_leaks = rules.find_leaks("أنا ولؤي ... لطارق")
+        assert len(clitic_leaks) == 2
+
+        # Stopwords, placeholders, quotes, rhetorical echo, and non-known names must pass
+        for clean_phrase in (
+            "فاهم يا يعني",
+            "قول يا طيب",
+            "إيه يا بقى؟",
+            "أخبارك إيه يا فلان؟",
+            "تعدد إيه يا أبو تعدد؟",
+            '"يا سعيد؟"',
+            "أبو عبد الرحمن سأل",
+            "سعد بن معاذ قال",
+            "سيدنا معاذ قال",
+            "قال الإمام معاذ",
+            "مسند معاذ",
+            "النبي يوسف",
+            "معاذ بن جبل رضي الله عنه",
+            "يا معاذ رضي الله عنه",
+            "معاذ رحمه الله",
+            "النبي موسى عليه السلام",
+            "يا سعيد بن جبير؟",
+        ):
+            assert rules.find_leaks(clean_phrase) == [], f"Unexpected leak for: {clean_phrase}"
+
+        custom_rules = AttendeeAnonymizationRules(
+            known_attendee_names=frozenset({"أحمد", "يوسف", "خالد", "معاذ"}),
+        )
+        assert custom_rules.find_leaks("الشيخ خالد")
+        assert custom_rules.find_leaks("قال الإمام أحمد") == []
+        assert custom_rules.find_leaks("مسند أحمد") == []
+        assert custom_rules.find_leaks("النبي يوسف قال") == []
+
 
 class TestZeroImportIoAndModulePurity:
     def test_importing_all_tafreegh_modules_performs_zero_disk_reads(self):

@@ -195,6 +195,39 @@ class TestVerifyDocxHeaderAndConclusion(unittest.TestCase):
             ast_issues = [i for i in report.issues if i.code == "FORBIDDEN_CHAR_ASTERISK"]
             self.assertEqual(len(ast_issues), 0, f"Expected standalone bold Ayah Matn to pass, got: {ast_issues}")
 
+    def test_c14_allows_spaced_asterisk_inside_ornate_mushaf_brackets(self):
+        valid_mushaf_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+قال تعالى: ﴿وَإِذْ زَاغَتِ الأَبْصَارُ * هُنَالِكَ ابْتُلِيَ الْمُؤْمِنُونَ﴾ في سورة الأحزاب.
+
+**(قَالَ تَعَالَى: ﴿وَلَا تَقُولَنَّ لِشَيْءٍ إِنِّي فَاعِلٌ ذَلِكَ غَدًا * إِلَّا أَنْ يَشَاءَ اللَّهُ﴾)**
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        invalid_mushaf_md = """بسم الله الرحمن الرحيم
+المادة: رياض الصالحين
+2026-10-22
+
+آية بدون مسافة قبل النجمة: ﴿وَإِذْ زَاغَتِ الأَبْصَارُ* هُنَالِكَ ابْتُلِيَ الْمُؤْمِنُونَ﴾ في الشرح.
+
+عبارة بدون تشكيل: ﴿شطر أول * شطر ثاني﴾ في الشرح.
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ok_docx = Path(tmpdir) / "c14_ok.docx"
+            create_docx(valid_mushaf_md, ok_docx)
+            rep_ok = verify_docx(ok_docx)
+            self.assertTrue(rep_ok.passed, f"Expected spaced vowelized ornate Mushaf '*' to pass, got: {rep_ok.issues}")
+
+            bad_docx = Path(tmpdir) / "c14_bad.docx"
+            create_docx(invalid_mushaf_md, bad_docx)
+            rep_bad = verify_docx(bad_docx)
+            ast_paras = [i.paragraph_index for i in rep_bad.issues if i.code == "FORBIDDEN_CHAR_ASTERISK"]
+            self.assertEqual(ast_paras, [3, 4])
+
     def test_detects_wrong_concluding_dua(self):
         # Like line 89 of 2026-10-17_AI.md: وصلى الله instead of وصل اللهم, plus extra commas
         bad_dua_md = """بسم الله الرحمن الرحيم
@@ -887,6 +920,38 @@ button_magic Source guide
             codes = [i.code for i in report.issues if i.severity == Severity.ERROR]
             self.assertIn("RAW_HALLUCINATION_ADDITION", codes)
 
+    def test_c15_skips_leading_extensionless_date_stem_line_in_raw_coverage(self):
+        raw_md = """
+2015-05-25 زاد
+button_magic Source guide
+أهلا ومرحبا بكم إخواني الكرام طلاب العلم
+هذا شرح واضح ومفصل للمسألة الفقهية المتعلقة بأحكام السفر والجمع والقصر.
+"""
+        raw_underscore_md = """2015-05-25_زاد_المعاد_الدرس_الأول_المجلس_الثاني_شرح_الكتاب_الكريم
+هذا شرح واضح ومفصل للمسألة الفقهية المتعلقة بأحكام السفر والجمع والقصر.
+"""
+        clean_md = """بسم الله الرحمن الرحيم
+المادة: زاد المعاد
+2015-05-25
+
+هذا شرح واضح ومفصل للمسألة الفقهية المتعلقة بأحكام السفر والجمع والقصر، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "c15_clean.docx"
+            create_docx(clean_md, docx_path)
+
+            for idx, content in enumerate((raw_md, raw_underscore_md)):
+                raw_path = Path(tmpdir) / f"raw_{idx}.md"
+                raw_path.write_text(content, encoding="utf-8")
+                report = verify_docx(docx_path, raw_path=raw_path)
+                drop_issues = [i for i in report.issues if i.code == "RAW_COVERAGE_DROP"]
+                self.assertEqual(
+                    drop_issues,
+                    [],
+                    f"Expected leading extensionless stem line in raw_{idx} to be ignored, got: {drop_issues}",
+                )
+                self.assertTrue(report.passed, f"Expected clean report for raw_{idx}, got: {report.issues}")
+
     def test_matn_alignment_verifies_primary_matn_against_source(self):
         matn_md = """# متن السلم المنورق
 فَهَاكَ مِنْ أُصُولِهِ قَوَاعِدَا ... تَجْمَعُ مِنْ فُنُونِهِ فَوَائِدَا
@@ -990,6 +1055,67 @@ button_magic Source guide
             create_docx(distant_compound_md, distant_docx)
             rep_distant = verify_docx(distant_docx, matn_path=distant_matn_path)
             self.assertIn("MATN_SOURCE_MISMATCH", [i.code for i in rep_distant.issues])
+
+    def test_c13_verify_docx_merged_primary_fallback_nfc_tanween_and_short_attribution(self):
+        matn_md = (
+            "بِلَفْظِ: «كَانَ اللَّهُ وَلَمْ يَكُنْ شَيْءٌ قَبْلَهُ، وَكَانَ عَرْشُهُ عَلَى الْمَاءِ، ثُمَّ خَلَقَ السَّمَاوَاتِ وَالْأَرْضَ».\n\n"
+            "قَوْلُهُ: (وَبِيَدِهِ الْأُخْرَى الْمِيزَانُ يَخْفِضُ وَيَرْفَعُ) قَالَ الْخَطَّابِيُّ: الْمِيزَانُ مَثَلٌ، وَالْمُرَادُ الْقِسْمَةُ بَيْنَ الْخَلْقِ، "
+            "وَإِلَيْهِ الْإِشَارَةُ بِقَوْلِهِ \"يَخْفِضُ وَيَرْفَعُ\". وَقَالَ الدَّاوُدِيُّ: مَعْنَى الْمِيزَانِ أَنَّهُ قَدَّرَ الْأَشْيَاءَ وَوَقَّتَهَا وَحَدَّدَهَا "
+            "فَلَا يَمْلِكُ أَحَدٌ نَفْعًا وَلَا ضَرًّا إِلَّا مِنْهُ وَبِهِ. وَوَقَعَ فِي رِوَايَةِ هَمَّامٍ: \"وَبِيَدِهِ الْأُخْرَى الْفَيْضُ أَوْ الْقَبْضُ\"، "
+            "وَفِي حَدِيثِ النَّوَّاسِ بْنِ سَمْعَانَ عِنْدَ مُسْلِمٍ: «الْمِيزَانُ بِيَدِ الرَّحْمَنِ يَرْفَعُ أَقْوَامًا وَيَضَعُ آخَرِينَ»، "
+            "وَفِي حَدِيثِ أَبِي مُوسَى عِنْدَ مُسْلِمٍ: «إِنَّ اللَّهَ لَا يَنَامُ وَلَا يَنْبَغِي لَهُ أَنْ يَنَامَ، يَخْفِضُ الْقِسْطَ وَيَرْفَعُهُ»، "
+            "وَالْقِسْطُ الْمِيزَانُ.\n\n"
+            "إِنَّ \u0627\u0644\u0644\u0651\u064e\u0647\u064e غَفُورٌ رَحِيمٌ.\n\n"
+            "قَالَ ابْنُ بَطَّالٍ فِي شَرْحِهِ.\n"
+        )
+        valid_md = """بسم الله الرحمن الرحيم
+المادة: التوحيد (فتح الباري - كتاب التوحيد)
+2026-10-22
+
+**(بِلَفْظِ: «كَانَ اللَّهُ وَلَمْ يَكُنْ شَيْءٌ قَبْلَهُ، وَكَانَ عَرْشُهُ عَلَى الْمَاءِ، ثُمَّ خَلَقَ السَّمَاوَاتِ وَالْأَرْضَ» قَوْلُهُ: (وَبِيَدِهِ الْأُخْرَى الْمِيزَانُ يَخْفِضُ وَيَرْفَعُ) أي يخفض الميزان ويرفعها، قَالَ الْخَطَّابِيُّ: الْمِيزَانُ مَثَلٌ، وَالْمُرَادُ الْقِسْمَةُ بَيْنَ الْخَلْقِ، وَإِلَيْهِ الْإِشَارَةُ بِقَوْلِهِ "يَخْفِضُ وَيَرْفَعُ". وَقَالَ الدَّاوُدِيُّ: مَعْنَى الْمِيزَانِ أَنَّهُ قَدَّرَ الْأَشْيَاءَ وَوَقَّتَهَا وَحَدَّدَهَا فَلَا يَمْلِكُ أَحَدٌ نَفْعًا وَلَا ضَرًّا إِلَّا مِنْهُ وَبِهِ)**
+
+**(وَوَقَعَ فِي رِوَايَةِ هَمَّامٍ: "وَبِيَدِهِ الْأُخْرَى الْفَيْضُ أَوْ الْقَبْضُ" الأولى بفاء وتحتانية والثانية بقاف وموحدة، كذا للبخاري بالشك، ولمسلم بالقاف والموحدة بلا شك، وعن بعض رواياته فيما حكاه عياض بالفاء والتحتانية)**
+
+**(ووقع وَفِي حَدِيثِ النَّوَّاسِ بْنِ سَمْعَانَ عِنْدَ مُسْلِمٍ: «الْمِيزَانُ بِيَدِ الرَّحْمَنِ يَرْفَعُ أَقْوَامًا وَيَضَعُ آخَرِينَ»، وَفِي حَدِيثِ أَبِي مُوسَى عِنْدَ مُسْلِمٍ: «إِنَّ اللَّهَ لَا يَنَامُ وَلَا يَنْبَغِي لَهُ أَنْ يَنَامَ، يَخْفِضُ الْقِسْطَ وَيَرْفَعُهُ»، وظاهره أن المراد بالقسط الميزان، وهو مما يؤيد أن الضمير المستتر في قوله: "يخفض ويرفع" للميزان كما بدأت الكلام به)**
+
+**(إِنَّ \u0627\u0644\u0644\u064e\u0651\u0647\u064e غَفُورٌ رَحِيمٌ)**
+
+**(قال المصنف قائلًا: هذا كلام خرصًا ويدًا وجملةً وقضاءً)**
+
+**(قال ابن بطال)**
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        bad_md = """بسم الله الرحمن الرحيم
+المادة: التوحيد (فتح الباري - كتاب التوحيد)
+2026-10-22
+
+**(وَوَقَعَ فِي رِوَايَةِ هِشَامٍ: "وَبِيَدِهِ الْأُخْرَى الْفَيْضُ أَوْ الْقَبْضُ" الأولى بفاء وتحتانية)**
+
+**(ووقع وَفِي حَدِيثِ النَّوَّاسِ بْنِ سَمْعَانَ عِنْدَ مُسْلِمٍ: «الْمِيزَانُ بِيَدِ الرَّحْمَنِ يَرْفَعُ أَقْوَامًا وَيَضَعُ آخَرِينَ»، كما بدأتُ الكلام به)**
+
+**(قال المصنف قَائِلًا: هذا كلام)**
+
+**(هَذَا كَلَامٌ)**
+
+**(قال ابن بطال في شرحه)**
+
+والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            matn_path = Path(tmpdir) / "matn.md"
+            matn_path.write_text(matn_md, encoding="utf-8")
+
+            ok_docx = Path(tmpdir) / "c13_ok.docx"
+            create_docx(valid_md, ok_docx)
+            rep_ok = verify_docx(ok_docx, matn_path=matn_path)
+            self.assertTrue(rep_ok.passed, f"Expected merged/NFC/tanween/short-fallback doc to pass, got: {rep_ok.issues}")
+
+            bad_docx = Path(tmpdir) / "c13_bad.docx"
+            create_docx(bad_md, bad_docx)
+            rep_bad = verify_docx(bad_docx, matn_path=matn_path)
+            mismatch_paras = [i.paragraph_index for i in rep_bad.issues if i.code == "MATN_SOURCE_MISMATCH"]
+            self.assertEqual(mismatch_paras, [3, 4, 5, 6, 7])
 
     def test_detects_unbolded_fallback_matn_segments_in_explanation(self):
         # Tests general trigger rules (قالوا, فإن قلت, قال الشاعر, قلت, فصل في, قال, وأيضا)
@@ -1135,6 +1261,69 @@ button_magic Source guide
             }
             self.assertEqual(custom_fb_paras, {3, 4, 5, 6})
 
+    def test_c12_eliminates_fallback_matn_false_positives_on_words_subjects_and_citations(self):
+        clean_md = """بسم الله الرحمن الرحيم
+المادة: المنطق (السلم المنورق)
+2026-11-07
+
+لو بلغ الماء قلتين لم يحمل الخبث، فهذا حكم معروف في الفقه.
+
+وهذه المسألة قلتها في الدرس السابق عند بيان أصل الباب.
+
+ما أنت قلت لي الكلام ده قبل كدا؟
+
+ما أنت قلت: هذا أمر معلوم عند أهل العلم.
+
+قلت له اعمل لي كوباية شاي عشان نكمل الشرح.
+
+قلت لهم: هذا أمر واجب في كل حين.
+
+فالنبي صلى الله عليه وسلم قال: "خذوا عني مناسككم، لعلي لا ألقاكم بعد عامي هذا".
+
+قال: "أنا خيار من خيار من خيار"، وهذه مناقب ثابتة في السنة النبوية.
+
+قال: (حَتَّىٰ يُعْطُوا الْجِزْيَةَ عَنْ يَدٍ وَهُمْ صَاغِرُونَ)، وهذا حكم ثابت في أهل الكتاب.
+
+وطبعًا هم قالوا: هذه مسألة عظيمة في باب الاعتقاد والعمل.
+
+وطبعًا قالوا: هذا قول صحيح ومعتمد في المذهب.
+
+واحد معدي، قال: هذا الذي مر بك يعلم ألف دليل ودليل؟ قلت: هل وجود الله يحتاج ألف دليل ودليل؟
+
+ما هو هذا القول معروف، قال: إن المسألة مبنية على أصل معتبر عند العلماء، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "c12_clean.docx"
+            create_docx(clean_md, docx_path)
+            report = verify_docx(docx_path)
+            fb_issues = [i for i in report.issues if i.code == "UNBOLDED_FALLBACK_MATN"]
+            self.assertEqual(fb_issues, [], f"Expected zero UNBOLDED_FALLBACK_MATN false positives, got: {fb_issues}")
+            self.assertTrue(report.passed, f"Expected clean document to pass, got: {report.issues}")
+
+    def test_c12_detects_scholar_and_structural_fallback_matn_triggers_as_errors(self):
+        flagged_md = """بسم الله الرحمن الرحيم
+المادة: المنطق (السلم المنورق)
+2026-11-07
+
+قال ابن منظور: كل شيء أظلك من السماء فهو سماء.
+
+يقول ابن عاشور: هذا المعنى مستفاد من سياق الآية الكريمة.
+
+مسألة: لا يصح بيع المزابنة إلا في العرايا.
+
+فائدة: إنما سمي هذا الباب بذلك لاشتماله على الأصول.
+
+الشرح: المراد بهذا اللفظ العموم عند جمهور الأصوليين، والحمد لله رب العالمين وصل اللهم على نبينا محمد وعلى آله وصحبه أجمعين، سبحانك اللهم وبحمدك نشهد أن لا إله إلا أنت نستغفرك ونتوب إليك.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "c12_flagged.docx"
+            create_docx(flagged_md, docx_path)
+            report = verify_docx(docx_path)
+            fb_issues = [i for i in report.issues if i.code == "UNBOLDED_FALLBACK_MATN"]
+            self.assertEqual([i.paragraph_index for i in fb_issues], [3, 4, 5, 6, 7])
+            self.assertTrue(all(i.severity == Severity.ERROR for i in fb_issues))
+            self.assertFalse(report.passed)
+
 
 class TestVerifyDocxCLI(unittest.TestCase):
     def test_cli_returns_zero_on_valid_and_nonzero_on_invalid_with_json(self):
@@ -1261,6 +1450,42 @@ class TestMatnAlignmentValidator(unittest.TestCase):
         self.assertTrue(validator.verify_exported_segment("قال تعالى: (أَوْ سُلَّمًا فِي السَّمَاءِ)"))
         # Fallback with unverified bogus outer tashkeel is rejected
         self.assertFalse(validator.verify_exported_segment("هَذَا كَلَامٌ خَارِجَ الْمَتْنِ"))
+
+    def test_c13_validator_widened_compound_sharh_tanween_nfc_and_merged_blocks(self):
+        source = (
+            "أَأَنْثُرُ دُرًّا بَيْنَ سَارِحَةِ الْبَهْمِ ... "
+            "وَهَذِهِ هِيَ قَاعِدَةُ الْمَذْهَبِ ... "
+            "كَمَا بَيَّنَ ذَلِكَ الشَّارِحُ ... "
+            "قَالَ \u0627\u0644\u0644\u0651\u064e\u0647\u064f تَعَالَى ... "
+            "فِي كِتَابِهِ وَذَلِكَ أَنَّكُمْ فِي أَهْلِ الشِّرْكِ"
+        )
+        validator = MatnAlignmentValidator(source)
+        # Widened compound Sharh lead-ins + tanween-fatha on قائلًا
+        self.assertTrue(validator.verify_exported_segment("ثم أنشد قائلًا: أَأَنْثُرُ دُرًّا بَيْنَ سَارِحَةِ الْبَهْمِ"))
+        self.assertTrue(validator.verify_exported_segment("قال الشيخ العثيمين: وَهَذِهِ هِيَ قَاعِدَةُ الْمَذْهَبِ"))
+        self.assertTrue(validator.verify_exported_segment("لقوله تعالى: كَمَا بَيَّنَ ذَلِكَ الشَّارِحُ"))
+        # NFC combining-order equivalence
+        self.assertTrue(validator.verify_exported_segment("قَالَ \u0627\u0644\u0644\u064e\u0651\u0647\u064f تَعَالَى"))
+        # Compound Sharh + NFC combining-order equivalence + tanween-fatha
+        nfc_source = "فَقُلْنَا: \u0648\u064e\u0628\u0650\u0627\u0644\u0644\u0651\u064e\u0647\u0650 التَّوْفِيقُ"
+        nfc_validator = MatnAlignmentValidator(nfc_source)
+        self.assertTrue(
+            nfc_validator.verify_exported_segment("ثم أنشد قائلًا: \u0648\u064e\u0628\u0650\u0627\u0644\u0644\u064e\u0651\u0647\u0650")
+        )
+        # Distant (>2000 chars) short 3-word unvowelized attribution must pass, while >=4 words fails
+        long_filler = " ".join(["كَلِمَةٌ"] * 350)
+        distant_attr_source = f"بِدَايَةٌ {long_filler} قَالَ ابْنُ بَطَّالٍ فِي شَرْحِهِ"
+        distant_attr_validator = MatnAlignmentValidator(distant_attr_source)
+        self.assertTrue(distant_attr_validator.verify_exported_segment("قال ابن بطال"))
+        self.assertFalse(distant_attr_validator.verify_exported_segment("قال ابن بطال في شرحه"))
+        # Fallback citation + Primary tail
+        self.assertTrue(validator.verify_exported_segment("قال تعالى: (أَوْ سُلَّمًا)، وَذَلِكَ أَنَّكُمْ فِي أَهْلِ الشِّرْكِ"))
+        # Bogus vowelized prefix before citation is rejected
+        self.assertFalse(validator.verify_exported_segment("قَالَ تَعَالَى: (أَوْ سُلَّمًا)"))
+        # Bogus stray single vowelized word in Fallback (even if common particle exists in source) is rejected
+        self.assertFalse(validator.verify_exported_segment("هذا كلام فِي شرح المسألة"))
+        # Corrupted diacritic inside Primary sub-span of merged block is rejected
+        self.assertFalse(validator.verify_exported_segment("وَهَذِهِ هِيَ قَاعِدَةُ الْمَذْهَبُ هذا شرح"))
 
     def test_verify_docx_retired_private_matn_helper(self):
         from tafreegh import verify_docx as verify_docx_mod

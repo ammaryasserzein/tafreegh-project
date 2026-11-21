@@ -110,3 +110,44 @@ def test_cli_usage_points_to_canonical_skill_script():
     )
     assert result.returncode == 1
     assert ".agents/skills/tafreegh/scripts/chunk_transcript.py" in result.stdout
+
+
+def test_smart_chunk_text_scales_bounds_for_large_and_small_custom_targets():
+    large_sentences = [
+        f"هذه جملة علمية رقم {i} فيها شرح واضح ومفصل للمسألة الفقهية في الدرس."
+        for i in range(1, 335)
+    ]
+    large_text = " ".join(large_sentences)  # ~4000+ words
+    large_chunks = chunk_transcript.smart_chunk_text(large_text, target_words=3200)
+
+    assert len(large_chunks) == 2
+    assert 2462 <= len(large_chunks[0].split()) <= 3938
+    assert " ".join(large_chunks).split() == large_text.split()
+
+    small_sentences = [
+        f"هذه جملة علمية رقم {i} فيها شرح واضح للمسألة."
+        for i in range(1, 18)
+    ]
+    small_text = " ".join(small_sentences)  # ~153 words
+    small_chunks = chunk_transcript.smart_chunk_text(small_text, target_words=100)
+
+    assert len(small_chunks) == 2
+    assert 77 <= len(small_chunks[0].split()) <= 123
+    assert " ".join(small_chunks).split() == small_text.split()
+
+
+def test_chunk_file_scales_thresholds_for_custom_target_words(tmp_path):
+    sentences = [
+        f"فقرة رقم {i} من الدرس الشرعي المبارك تتناول بيان الحكم الشرعي بدليله الواضح."
+        for i in range(1, 335)
+    ]
+    transcript = tmp_path / "2026-10-17_رياض.md"
+    transcript.write_text(" ".join(sentences), encoding="utf-8")
+
+    created = chunk_transcript.chunk_file(str(transcript), target_words=3200)
+
+    assert len(created) == 2
+    assert 2462 <= created[0][1] <= 3938
+    reconstructed = " ".join(path.read_text(encoding="utf-8") for path, _ in created)
+    assert reconstructed.split() == transcript.read_text(encoding="utf-8").split()
+

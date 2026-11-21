@@ -86,6 +86,55 @@ def extract_matn_segments(markdown_text: str) -> list[ExtractedMatn]:
     return results
 
 
+_FUZZY_CONTAINMENT_THRESHOLD = 0.70
+_FUZZY_JACCARD_THRESHOLD = 0.40
+
+
+def _token_overlap_similarity(a_norm: str, u_norm: str) -> tuple[float, float]:
+    """Return (containment, jaccard) token overlap, allowing sub-token inflection variants."""
+    a_tokens = a_norm.split()
+    u_tokens = u_norm.split()
+    if not a_tokens or not u_tokens:
+        return 0.0, 0.0
+
+    u_used = [False] * len(u_tokens)
+    a_unmatched: list[str] = []
+    matched_weight = 0.0
+
+    for a_tok in a_tokens:
+        match_j = next(
+            (j for j, u_tok in enumerate(u_tokens) if not u_used[j] and u_tok == a_tok),
+            None,
+        )
+        if match_j is not None:
+            u_used[match_j] = True
+            matched_weight += 1.0
+        else:
+            a_unmatched.append(a_tok)
+
+    for a_tok in a_unmatched:
+        best_j: int | None = None
+        best_w = 0.0
+        for j, u_tok in enumerate(u_tokens):
+            if u_used[j]:
+                continue
+            shorter_len = min(len(a_tok), len(u_tok))
+            if shorter_len >= 3 and (a_tok in u_tok or u_tok in a_tok):
+                weight = shorter_len / max(len(a_tok), len(u_tok))
+                if weight > best_w:
+                    best_w = weight
+                    best_j = j
+        if best_j is not None:
+            u_used[best_j] = True
+            matched_weight += best_w
+
+    min_len = min(len(a_tokens), len(u_tokens))
+    union_len = len(a_tokens) + len(u_tokens) - matched_weight
+    containment = matched_weight / min_len
+    jaccard = matched_weight / union_len if union_len > 0 else 0.0
+    return containment, jaccard
+
+
 def _build_text_edit_diff(
     user_seg: ExtractedMatn,
     matched_ai: ExtractedMatn,
@@ -190,7 +239,8 @@ def classify_matn_diffs(
         else:
             unmatched_user.append((u_norm, u_seg))
 
-    # Pass 2: Unconsumed substring boundary match
+    # Pass 2a: Unconsumed substring boundary match
+    still_unmatched: list[tuple[str, ExtractedMatn]] = []
     for u_norm, u_seg in unmatched_user:
         overlapping = [
             idx
@@ -204,8 +254,44 @@ def classify_matn_diffs(
                 consumed_ai.add(idx)
 
             any_fallback = any(ai_entries[idx][1].is_fallback for idx in consumed_here)
-            matched_ai = ai_entries[consumed_here[0]][1]
-            edit_diff = _build_text_edit_diff(u_seg, matched_ai, is_fallback=any_fallback)
+            matched_a_norm, matched_ai = ai_entries[consumed_here[0]]
+            has_non_source_wrapper = bool(
+                norm_source
+                and matched_a_norm in u_norm
+                and u_norm not in norm_source
+            )
+            edit_diff = _build_text_edit_diff(
+                u_seg,
+                matched_ai,
+                is_fallback=any_fallback or has_non_source_wrapper,
+            )
+            if edit_diff is not None:
+                diff_items.append(edit_diff)
+        else:
+            still_unmatched.append((u_norm, u_seg))
+
+    # Pass 2b: Token-overlap similarity against remaining unconsumed AI segments
+    for u_norm, u_seg in still_unmatched:
+        best_idx: int | None = None
+        best_score: tuple[float, float] = (0.0, 0.0)
+        for idx, (a_norm, _) in enumerate(ai_entries):
+            if idx in consumed_ai:
+                continue
+            containment, jaccard = _token_overlap_similarity(a_norm, u_norm)
+            if containment >= _FUZZY_CONTAINMENT_THRESHOLD and jaccard >= _FUZZY_JACCARD_THRESHOLD:
+                score = (jaccard, containment)
+                if score > best_score:
+                    best_score = score
+                    best_idx = idx
+
+        if best_idx is not None:
+            consumed_ai.add(best_idx)
+            matched_ai = ai_entries[best_idx][1]
+            edit_diff = _build_text_edit_diff(
+                u_seg,
+                matched_ai,
+                is_fallback=matched_ai.is_fallback,
+            )
             if edit_diff is not None:
                 diff_items.append(edit_diff)
         else:

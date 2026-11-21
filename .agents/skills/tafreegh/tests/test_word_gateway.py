@@ -84,6 +84,66 @@ class TestWordGatewaySanitizationAndMatnSource(unittest.TestCase):
             with self.assertRaises(DocxArchiveError):
                 read_matn_source_content(missing_docx)
 
+    def test_read_matn_source_content_strips_markdown_wrappers_preserving_spaced_quran_asterisks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            md_path = Path(tmpdir) / "matn.md"
+            md_path.write_text(
+                "> ## **التَّعَبُّدُ:**\n\n> *النَّظَرُ* في **(آية * آية)** و (سُورَةٌ * أُخْرَى)",
+                encoding="utf-8",
+            )
+            cleaned = read_matn_source_content(md_path)
+            self.assertEqual(
+                cleaned,
+                "التَّعَبُّدُ:\n\nالنَّظَرُ في (آية * آية) و (سُورَةٌ * أُخْرَى)",
+            )
+
+    def test_create_docx_never_writes_literal_double_asterisks_on_nested_bold(self):
+        md = """بسم الله الرحمن الرحيم
+المادة: المنطق (السلم المنورق)
+2026-10-17
+
+**(مَتْنٌ أَوَّلُ)** وَكَلَامٌ **(مَتْنٌ ثَانٍ)**
+
+**(نَصٌّ **دَاخِلِيٌّ**)**
+
+**(نَصٌّ **مُفْرَدٌ)**
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / "nested_bold.docx"
+            create_docx(md, out_path)
+            info = inspect_docx(out_path)
+            for p in info.paragraphs:
+                self.assertNotIn("**", p.text, f"Literal '**' leaked into paragraph: {p.text}")
+                for r in p.runs:
+                    self.assertNotIn("**", r.text, f"Literal '**' leaked into run: {r.text}")
+
+    def test_create_docx_preserves_inline_bold_runs_with_bcs(self):
+        md = """بسم الله الرحمن الرحيم
+المادة: المنطق (السلم المنورق)
+2026-10-17
+
+نص فيه **(متن مضمن)** هنا.
+
+طالب: قال **(متن)** هنا.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / "inline_bold.docx"
+            create_docx(md, out_path)
+            info = inspect_docx(out_path)
+
+            p_mixed = info.paragraphs[3]
+            self.assertEqual(p_mixed.text, "نص فيه (متن مضمن) هنا.")
+            bold_runs = [r for r in p_mixed.runs if r.is_bold]
+            self.assertEqual([r.text for r in bold_runs], ["(متن مضمن)"])
+            self.assertTrue(bold_runs[0].has_b)
+            self.assertTrue(bold_runs[0].has_b_cs)
+
+            p_student = info.paragraphs[4]
+            self.assertEqual(p_student.text, "طالب: قال (متن) هنا.")
+            student_bold_runs = [r for r in p_student.runs if r.is_bold]
+            self.assertEqual([r.text for r in student_bold_runs], ["(متن)"])
+            self.assertTrue(student_bold_runs[0].has_b_cs)
+
     def test_create_docx_raises_on_corrupt_template(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

@@ -93,6 +93,9 @@ def test_build_search_index_aligns_positions_and_extracts_vowelized_spans():
         "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ ... الحَدُّ وَالمَوْضُوعُ ثُمَّ الثَّمَرَهْ!",
         "سُورَةُ الضُّحَىٰ — ٱلْحَمْدُ لِلَّـهِ (1): فَقِهْ_الْبُيُوعِ!",
         "  أَبُو\u200f إِبْرَاهِيمَ  \t آل\n عِمْرَانَ  ",
+        "قَالَ {بَدِيعُ} [البقرة: 117] وَقَالَ: [1] خُلِقَ [الملك: ٣ - ٤] تَفَاوُتٍ [الْعَمَلُ ثَمَرَةٌ]",
+        "أَمْرٌ[1]نَافِعٌ [2] نَافِعٌ[3]",
+        "[1] [2]",
     ],
 )
 def test_build_search_index_matches_normalize_arabic_search_parity(sample: str):
@@ -103,6 +106,38 @@ def test_strip_tashkeel_preserving_citations_handles_tatweel_empty_and_unmatched
     assert strip_tashkeel_preserving_citations("مَـتْـنٌ () وَمَا (لَـم) يَـنْـتَـهِ (بِـلَا") == (
         "متن () وما (لَـم) ينته (بلا"
     )
+
+
+def test_strip_tashkeel_preserving_citations_preserves_ornate_and_quoted_citations():
+    text = (
+        'قَالَ تَعَالَى: ﴿وَإِذْ زَاغَتِ الأَبْصَارُ﴾ وَقَالَ النَّبِيُّ: "أُتِيَ النَّبِيُّ" '
+        'وَفَارِغٌ ﴿﴾ "" وَغَيْرُ مُغْلَقٍ ﴿آيَةٌ "حَدِيثٌ'
+    )
+    assert strip_tashkeel_preserving_citations(text) == (
+        'قال تعالى: ﴿وَإِذْ زَاغَتِ الأَبْصَارُ﴾ وقال النبي: "أُتِيَ النَّبِيُّ" '
+        'وفارغ ﴿﴾ "" وغير مغلق ﴿آية "حديث'
+    )
+
+
+def test_build_search_index_skips_editorial_digit_brackets_while_retaining_flanked_source():
+    source = "قَالَ {بَدِيعُ} [البقرة: 117] وَقَالَ: [1] خُلِقَ [الملك: ٣ - ٤] تَفَاوُتٍ [الْعَمَلُ ثَمَرَةٌ]"
+    assert normalize_arabic_search(source) == "قال بديع وقال خلق تفاوت العمل ثمره"
+
+    indexed = build_search_index(source)
+    assert indexed.normalized == normalize_arabic_search(source)
+
+    query = "قال بديع وقال"
+    norm_start = indexed.normalized.index(query)
+    norm_end = norm_start + len(query)
+    orig_start, orig_end, extracted = indexed.extract_span(norm_start, norm_end)
+    assert extracted == "قَالَ {بَدِيعُ} [البقرة: 117] وَقَالَ"
+    assert source[orig_start:orig_end] == extracted
+
+    compact = "أَمْرٌ[1]نَافِعٌ"
+    compact_idx = build_search_index(compact)
+    assert compact_idx.normalized == "امر نافع"
+    _, _, compact_extracted = compact_idx.extract_span(0, len(compact_idx.normalized))
+    assert compact_extracted == "أَمْرٌ[1]نَافِعٌ"
 
 
 @pytest.mark.parametrize(

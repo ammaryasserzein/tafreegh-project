@@ -58,10 +58,18 @@ _DEFAULT_VOCATIVE_STOPWORDS: frozenset[str] = frozenset({
     "ناس", "طالب", "طلاب", "حبيبي", "حبيبنا", "بشمهندس", "مهندس",
     "جميل", "عسل", "عساسيل", "عسايل", "حلويات", "إما", "اما", "إيه", "ايه", "ولا",
     "قول", "سؤال", "سلام", "نهار", "ابن", "واد", "كمن", "اللي", "ليتني", "ذا", "روح",
+    "يعني", "طيب", "بقى",
 })
 _ILLUSTRATION_ACTIONS = (
     r"(?:ب?[يت]عمل|ب?[يت]سأل|ب?[يت]قول|قال[ت]?|عايز[ةه]?|عاوز[ةه]?|"
     r"قاعد[ةه]?|واقف[ةه]?|نايم[ةه]?|جه|جا[تت]|راح[ت]?|شايف[ةه]?|سامع[ةه]?)"
+)
+_QUOTE_SPAN_RE = re.compile(r'«[^»]*»|"[^"]*"')
+_HISTORICAL_PREFIX_RE = re.compile(
+    r"(?:^|(?<!\w))[وف]?(?:سيدنا|بن|ابن|الإمام|الامام|مسند|النبي)\s+$"
+)
+_HISTORICAL_SUFFIX_RE = re.compile(
+    r"^\s*(?:بن|ابن|رضي الله عن(?:ه|ها|هما|هم|هن)|علي(?:ه|ها|هما|هم) السلام|رحم(?:ه|ها|هم) الله)(?!\w)"
 )
 
 
@@ -261,6 +269,39 @@ class AttendeeAnonymizationRules:
             return True
         return bool(re.match(r"^ت[\u0621-\u064A]{3,}ه$", token))
 
+    @staticmethod
+    def _is_historical_or_companion_context(text: str, start: int, end: int) -> bool:
+        """Return True when a candidate name match is preceded/followed by a Companion, Imam, or Prophet marker."""
+        pre_stripped = strip_tashkeel(text[max(0, start - 35) : start])
+        if _HISTORICAL_PREFIX_RE.search(pre_stripped):
+            return True
+        post_stripped = strip_tashkeel(text[end : end + 35])
+        return bool(_HISTORICAL_SUFFIX_RE.search(post_stripped))
+
+    def _is_vocative_exempt(
+        self,
+        text: str,
+        match: re.Match[str],
+        cand: str,
+        prefix: str | None,
+        *,
+        require_echo_trigger: bool,
+    ) -> bool:
+        """Return True when a matched vocative candidate is a placeholder, stopword, echo, or exempt figure."""
+        if cand == self.placeholder or cand in self.exempt_names:
+            return True
+        if prefix and prefix in self.kunya_prefixes:
+            pre_window = text[max(0, match.start() - 35) : match.start()]
+            trig = match.groupdict().get("trig", "").strip()
+            has_echo_trig = trig in ("إيه", "ايه") if require_echo_trigger else bool(
+                re.search(r"(?:^|\s)(?:إيه|ايه)\s*$", pre_window)
+            )
+            return bool(
+                has_echo_trig
+                and re.search(rf"(?<!\w)(?:[وفبكل]?ال|[وفبكل])?{re.escape(cand)}(?!\w)", pre_window)
+            )
+        return cand in self.title_prefixes or self.is_vocative_non_name(cand)
+
     def find_leaks(self, text: str) -> list[tuple[str, str]]:
         """Scans stripped prose for unanonymized kinship, classroom vocative, and illustration attendee references."""
         all_prefixes = sorted(self.kunya_prefixes | self.title_prefixes, key=len, reverse=True)
@@ -270,12 +311,25 @@ class AttendeeAnonymizationRules:
         )
         prefix_group = rf"(?:(?:{prefix_alt})\s+)*" if prefix_alt else ""
         voc_prefix_group = rf"(?:(?P<prefix>{prefix_alt})\s+)?" if prefix_alt else ""
+        quote_spans = [(m.start(), m.end()) for m in _QUOTE_SPAN_RE.finditer(text)]
 
         leaks: list[tuple[str, str]] = []
         matched_spans: list[tuple[int, int]] = []
 
         def _overlaps(start: int, end: int) -> bool:
             return any(max(start, s) < min(end, e) for s, e in matched_spans)
+
+        def _in_quotes(start: int, end: int) -> bool:
+            return any(qs <= start and end <= qe for qs, qe in quote_spans)
+
+        def _record_if_clean(kind: str, m: re.Match[str]) -> None:
+            start, end = m.start(), m.end()
+            if _overlaps(start, end) or _in_quotes(start, end):
+                return
+            if self._is_historical_or_companion_context(text, start, end):
+                return
+            matched_spans.append((start, end))
+            leaks.append((kind, m.group(0)))
 
         if kinship_alt:
             kinship_re = re.compile(
@@ -293,31 +347,33 @@ class AttendeeAnonymizationRules:
                 leaks.append(("reference", m_kin.group(0)))
 
         vocative_re = re.compile(
-            rf"(?<!\w)[وف]?(?P<trig>ولا\s+(?:إيه|ايه)|إيه|ايه|ها|قول|اتفضل|تفضل|نعم|ماشي|صح|فاهم)\s+يا\s+"
+            rf"(?<!\w)[وف]?(?P<trig>ولا\s+(?:إيه|ايه)|إيه|ايه|ها|قول|اتفضل|تفضل|نعم|ماشي|صح|فاهم|خد|خذ|اديله|وصل|لمين)\s+يا\s+"
             rf"{voc_prefix_group}(?P<cand>[\u0621-\u064A]{{3,}})(?!\w)"
         )
         for m_voc in vocative_re.finditer(text):
-            cand = m_voc.group("cand")
-            prefix = m_voc.groupdict().get("prefix")
-            trig = m_voc.group("trig").strip()
-            if cand == self.placeholder:
+            if self._is_vocative_exempt(
+                text,
+                m_voc,
+                m_voc.group("cand"),
+                m_voc.groupdict().get("prefix"),
+                require_echo_trigger=True,
+            ):
                 continue
-            if prefix and prefix in self.kunya_prefixes:
-                # Exempt Egyptian rhetorical topical echo: '<word> إيه يا أبو <word>'
-                pre_window = text[max(0, m_voc.start() - 35) : m_voc.start()]
-                if trig in ("إيه", "ايه") and re.search(
-                    rf"(?<!\w)(?:[وفبكل]?ال|[وفبكل])?{re.escape(cand)}(?!\w)", pre_window
-                ):
-                    continue
-                if not _overlaps(m_voc.start(), m_voc.end()):
-                    matched_spans.append((m_voc.start(), m_voc.end()))
-                    leaks.append(("vocative", m_voc.group(0)))
+            _record_if_clean("vocative", m_voc)
+
+        clause_final_voc_re = re.compile(
+            rf"(?<!\w)[وف]?يا\s+{voc_prefix_group}(?P<cand>[\u0621-\u064A]{{3,}})\s*[؟?!]"
+        )
+        for m_fvoc in clause_final_voc_re.finditer(text):
+            if self._is_vocative_exempt(
+                text,
+                m_fvoc,
+                m_fvoc.group("cand"),
+                m_fvoc.groupdict().get("prefix"),
+                require_echo_trigger=False,
+            ):
                 continue
-            if cand in self.exempt_names or cand in self.title_prefixes or self.is_vocative_non_name(cand):
-                continue
-            if not _overlaps(m_voc.start(), m_voc.end()):
-                matched_spans.append((m_voc.start(), m_voc.end()))
-                leaks.append(("vocative", m_voc.group(0)))
+            _record_if_clean("vocative", m_fvoc)
 
         cand_names = sorted(
             [n for n in self.known_attendee_names if n != self.placeholder and n not in self.exempt_names],
@@ -326,38 +382,45 @@ class AttendeeAnonymizationRules:
         )
         if cand_names:
             cand_alt = "|".join(re.escape(n) for n in cand_names)
-            quote_spans = [(m.start(), m.end()) for m in re.finditer(r'«[^»]*»|"[^"]*"', text)]
             bare_voc_re = re.compile(
                 rf"(?<!\w)[وف]?(?:يا|يَا)\s+{prefix_group}(?P<cand>{cand_alt})(?!\w)"
             )
             for m_bvoc in bare_voc_re.finditer(text):
-                if _overlaps(m_bvoc.start(), m_bvoc.end()):
-                    continue
-                if any(qs <= m_bvoc.start() and m_bvoc.end() <= qe for qs, qe in quote_spans):
-                    continue
-                tail_stripped = strip_tashkeel(text[m_bvoc.end():])
-                if re.match(r"^\s*(?:بن|ابن)\s+[\u0621-\u064A]{2,}", tail_stripped):
-                    continue
-                matched_spans.append((m_bvoc.start(), m_bvoc.end()))
-                leaks.append(("vocative", m_bvoc.group(0)))
+                _record_if_clean("vocative", m_bvoc)
 
+            known_title_prefixes = sorted(
+                self.kunya_prefixes | self.title_prefixes | {"الشيخ", "أبو"},
+                key=len,
+                reverse=True,
+            )
+            known_title_alt = "|".join(re.escape(p) for p in known_title_prefixes)
             illustration_patterns = [
                 re.compile(
-                    rf"(?<!\w){prefix_group}(?P<cand>{cand_alt})\s+{_ILLUSTRATION_ACTIONS}(?!\w)"
+                    rf"(?<!\w)[وفل]?{prefix_group}(?P<cand>{cand_alt})\s+{_ILLUSTRATION_ACTIONS}(?!\w)"
                 ),
                 re.compile(
-                    rf"(?<!\w)(?:مثل[اً]?|زي)\s*:\s*{prefix_group}(?P<cand>{cand_alt})(?!\w)"
+                    rf"(?<!\w)(?:مثل[اً]?|زي)\s*:\s*{prefix_group}[وفل]?(?P<cand>{cand_alt})(?!\w)"
                 ),
                 re.compile(
-                    rf"(?<!\w)زي\s+ما\s+(?:قال[ت]?|ب?[يت]قول)\s+{prefix_group}(?P<cand>{cand_alt})(?!\w)"
+                    rf"(?<!\w)زي\s+ما\s+(?:قال[ت]?|ب?[يت]قول)\s+{prefix_group}[وفل]?(?P<cand>{cand_alt})(?!\w)"
+                ),
+                re.compile(
+                    rf"(?<!\w)[وفل]?(?:{known_title_alt})\s+(?P<cand>{cand_alt})(?!\w)"
+                ),
+                re.compile(
+                    rf"(?<!\w)(?P<cand>{cand_alt})\s+[وف](?:{cand_alt}|{re.escape(self.placeholder)})(?!\w)"
+                ),
+                re.compile(
+                    rf"(?<!\w)[وفل](?P<cand>{cand_alt})(?!\w)"
+                ),
+                re.compile(
+                    rf"^طالب:\s*(?P<cand>{cand_alt})[ \t.؟!]*$",
+                    re.MULTILINE,
                 ),
             ]
             for pat in illustration_patterns:
                 for m_ill in pat.finditer(text):
-                    if _overlaps(m_ill.start(), m_ill.end()):
-                        continue
-                    matched_spans.append((m_ill.start(), m_ill.end()))
-                    leaks.append(("reference", m_ill.group(0)))
+                    _record_if_clean("reference", m_ill)
 
         return leaks
 
@@ -562,7 +625,7 @@ def _parse_dialect_rules(
                             v_clean = v.strip()
                             if not v_clean or any(ch in v_clean for ch in "[]()") or v_clean == target:
                                 continue
-                            variants.append(re.sub(r"\s+", r"\\s+", re.escape(v_clean)))
+                            variants.append(r"\s+".join(re.escape(part) for part in v_clean.split()))
                         if variants:
                             joined = "|".join(variants) if len(variants) > 1 else variants[0]
                             replacements.append((re.compile(rf"(?<!\w)(?:{joined})(?!\w)"), target))
@@ -572,13 +635,17 @@ def _parse_dialect_rules(
             tokens = [m[0] or m[1] for m in re.findall(r"\*\*([^*]+)\*\*|`([^`]+)`", stripped)]
             for tok in tokens:
                 tok_clean = tok.strip()
-                if not re.search(r"[\u0600-\u06FF]", tok_clean):
+                if not re.search(r"[\u0600-\u06FF]", tok_clean) or any(ch.isspace() for ch in tok_clean):
                     continue
                 fused_particles.add(tok_clean)
                 if tok_clean.startswith("م") and not tok_clean.startswith("ما"):
-                    unfused = "ما" + tok_clean[1:]
+                    rest = tok_clean[1:]
+                    unfused = "ما" + rest
                     fused_particles.add(unfused)
-                    replacements.append((re.compile(rf"(?<!\w){re.escape(unfused)}(?!\w)"), tok_clean))
+                    replacements.append((re.compile(rf"(?<!\w)ما\s*{re.escape(rest)}(?!\w)"), tok_clean))
+                    replacements.append(
+                        (re.compile(rf"(?<!\w)([وف])ما\s*{re.escape(rest)}(?!\w)"), rf"\1{tok_clean}")
+                    )
         elif "Compound Verb Negation" in stripped:
             tokens = [m[0] or m[1] for m in re.findall(r"\*\*([^*]+)\*\*|`([^`]+)`", stripped)]
             for tok in tokens:

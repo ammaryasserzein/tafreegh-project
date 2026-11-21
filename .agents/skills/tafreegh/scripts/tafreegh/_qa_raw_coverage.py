@@ -22,18 +22,23 @@ from .lecture_identity import (
 )
 
 _STUDENT_PREFIX_RE = re.compile(rf"^{re.escape(STUDENT_PREFIX)}\s*")
+_LEADING_STEM_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ _]+[^\n]+$")
 _FILLER_TOKENS = frozenset({"ا", "اا", "ااا", "ام", "اه", "ها", "و"})
 
 
 def _tokenize_cleaned_prose(text: str) -> list[str]:
-    """Strip NotebookLM tags/audio filenames and tokenize cleaned Arabic words for coverage checks."""
+    """Strip NotebookLM tags/audio filenames and leading extensionless stem lines for coverage checks."""
     lines: list[str] = []
+    non_empty_idx = 0
     for line in text.splitlines():
-        stripped = line.strip()
+        stripped = line.strip().lstrip("\ufeff").strip()
         if not stripped:
             continue
+        is_leading = non_empty_idx < 3
+        non_empty_idx += 1
         if (
-            any(pat.match(stripped) for pat in NOTEBOOKLM_HEADER_PATTERNS)
+            (is_leading and _LEADING_STEM_LINE_RE.match(stripped))
+            or any(pat.match(stripped) for pat in NOTEBOOKLM_HEADER_PATTERNS)
             or AUDIO_FILENAME_EXT_RE.search(stripped)
             or NOTEBOOKLM_TAG_RE.search(stripped)
         ):

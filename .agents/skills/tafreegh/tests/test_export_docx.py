@@ -13,8 +13,10 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from tafreegh.export_docx import (
     PublicationOrchestrator,
+    _extract_candidate_query,
     archive_processed_inputs,
     export_documents,
+    format_thousands,
     interleave_matn_segments,
     main as export_main,
     verify_isolated_segment,
@@ -27,6 +29,7 @@ from tafreegh.lecture_identity import (
     normalize_stem,
     resolve_document_identity,
     standardize_transcript_header,
+    strip_header_blocks,
 )
 from tafreegh.matn_matcher import SequentialMatnMatcher
 from tafreegh.workspace_catalog import RuleCatalog, WorkspaceConfig
@@ -292,6 +295,33 @@ Source guide
         clean = standardize_transcript_header(raw, identity=override, routing_map=self.routing_map)
         self.assertTrue(clean.startswith("بسم الله الرحمن الرحيم\nالمادة: فقه جديد\nالمحاضرة: 5"))
         self.assertNotIn("قديم", clean)
+
+    def test_header_resolution_and_create_docx_strip_utf8_bom(self):
+        self.assertTrue(is_header_line("\ufeffبسم الله الرحمن الرحيم"))
+        bom_md = "\ufeffبسم الله الرحمن الرحيم\nالمادة: المنطق (السلم المنورق)\n2026-10-17\n\nالحمد لله."
+        self.assertEqual(strip_header_blocks(bom_md), [["الحمد لله."]])
+        self.assertEqual(strip_header_blocks("\ufeffالحمد لله."), [["الحمد لله."]])
+
+        ident = resolve_document_identity(
+            "\ufeffالمادة: المنطق (السلم المنورق)\nالمحاضرة: 5\n\nالحمد لله.",
+            routing_map=self.routing_map,
+        )
+        self.assertEqual(ident.subject_name, "المنطق (السلم المنورق)")
+        self.assertEqual(ident.lecture_number, "5")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "bom.docx"
+            create_docx(bom_md, out_file)
+            doc = docx.Document(str(out_file))
+            self.assertEqual(
+                [p.text.strip() for p in doc.paragraphs],
+                [
+                    "بسم الله الرحمن الرحيم",
+                    "المادة: المنطق (السلم المنورق)",
+                    "2026-10-17",
+                    "الحمد لله.",
+                ],
+            )
 
 
 class TestCreateDocx(unittest.TestCase):
@@ -877,6 +907,60 @@ class TestPublicationOrchestratorAndInterleaving(unittest.TestCase):
             catalog=catalog,
         )
         self.assertIn("**(الشرح ده في قوله: بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ)**", interleaved)
+
+    def test_interleave_matn_segments_collapses_multiline_newlines(self):
+        from tafreegh.export_docx import _format_inline_segment, _format_standalone_segment
+        from tafreegh.matn_matcher import MatchMode, MatnMatchResult
+
+        matn_source = "إِنَّ مَبَادِئَ\n\nكُلِّ عِلْمٍ عَشَرَهْ"
+        matcher = SequentialMatnMatcher(matn_source)
+        catalog = RuleCatalog.load()
+        markdown = "**(ان مبادئ كل علم عشره)**\n\nشرح فيه **(ان مبادئ كل علم عشره)** هنا."
+        interleaved = interleave_matn_segments(markdown, matcher, catalog=catalog)
+        self.assertEqual(
+            interleaved,
+            "**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**\n\nشرح فيه **(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)** هنا.",
+        )
+
+        fb_res = MatnMatchResult(
+            mode=MatchMode.FALLBACK,
+            text="سقط\r\n\r\nمن المطبوعة",
+            start_pos=-1,
+            end_pos=-1,
+            is_fallback=True,
+            is_sandwiched=True,
+        )
+        self.assertEqual(
+            _format_standalone_segment(fb_res, catalog),
+            ["<!-- fallback -->", "**(سقط من المطبوعة)**"],
+        )
+        self.assertEqual(
+            _format_inline_segment(fb_res, catalog),
+            "<!-- fallback --> **(سقط من المطبوعة)**",
+        )
+
+    def test_extract_candidate_query_preserves_unbalanced_inner_parens_and_strips_trailing_period(self):
+        self.assertEqual(_extract_candidate_query("(وَلَا) بَيْعُ (مَنْزُوعِ)"), "(وَلَا) بَيْعُ (مَنْزُوعِ)")
+        self.assertEqual(_extract_candidate_query("(وَلَا) بَيْعُ (مَنْزُوعِ)."), "(وَلَا) بَيْعُ (مَنْزُوعِ).")
+        self.assertEqual(_extract_candidate_query("(مَتْنٌ)."), "مَتْنٌ")
+        self.assertEqual(_extract_candidate_query("(قَالَ (تَعَالَى) كَذَا)"), "قَالَ (تَعَالَى) كَذَا")
+        self.assertEqual(_extract_candidate_query("(أ (ب)"), "(أ (ب)")
+
+        matcher = SequentialMatnMatcher("مَتْنٌ كَرِيمٌ")
+        catalog = RuleCatalog.load()
+        out = interleave_matn_segments("**(متن).**\n\n**(وَلَا) بَيْعُ (مَنْزُوعِ)**", matcher, catalog=catalog)
+        self.assertIn("**(مَتْنٌ)**", out)
+        self.assertIn("**((وَلَا) بيع (مَنْزُوعِ))**", out)
+
+    def test_format_thousands_handles_arabic_prefixes_without_false_matches(self):
+        self.assertEqual(
+            format_thousands("بـ 1000 جنيه و بـ1000 و بـ 2000 و ال 1000 جنيه و الـ 1000 و الـ2000 و ال 2000"),
+            "بألف جنيه و بألف و بألفين و الألف جنيه و الألف و الألفين و الألفين",
+        )
+        self.assertEqual(
+            format_thousands("قال 1000 مرة و 1000 و 2000 و 5000 و 10000 و 11000 و 30000"),
+            "قال ألف مرة و ألف و ألفين و 5 آلاف و 10 آلاف و 11 ألف و 30 ألف",
+        )
 
     def test_orchestrator_separates_prepare_emit_and_explicit_archive_phases(self):
         with tempfile.TemporaryDirectory() as tmpdir:
