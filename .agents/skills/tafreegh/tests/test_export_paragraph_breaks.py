@@ -7,13 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
+import docx
+from docx.oxml.ns import qn
 
-import docx  # noqa: E402
-from docx.oxml.ns import qn  # noqa: E402
-
-from export_docx import create_docx  # noqa: E402
+from tafreegh.word_gateway import create_docx
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")

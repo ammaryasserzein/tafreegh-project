@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 import sys
 import tempfile
+import warnings
 import docx
 from docx.oxml.ns import qn
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -10,37 +11,55 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
-# Add scripts directory to sys.path
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from export_docx import (
-    get_onedrive_folder,
-    parse_metadata,
-    is_header_line,
-    standardize_transcript_header,
-    create_docx,
-    export_documents,
-    export_dual_copies,
+from tafreegh.export_docx import (
+    PublicationOrchestrator,
+    _extract_candidate_query,
     archive_processed_inputs,
-    is_matching_stem,
+    export_documents,
+    format_thousands,
+    interleave_matn_segments,
+    main as export_main,
+    verify_isolated_segment,
+)
+from tafreegh.word_gateway import DocxArchiveError, create_docx, extract_text, inspect_docx
+from tafreegh.lecture_identity import (
+    NOTEBOOKLM_HEADER_PATTERNS,
+    LectureIdentity,
+    is_header_line,
     normalize_stem,
     resolve_document_identity,
-    _extract_candidate_query,
-    _format_segment_output,
-    CANONICAL_SUBJECT_NAMES,
-    load_dialect_markers,
-    DIALECT_MARKERS,
+    standardize_transcript_header,
+    strip_header_blocks,
 )
-from lecture_identity import (
-    LectureIdentity,
-    load_canonical_routing,
-)
-from matn_matcher import MatnMatchResult, MatchMode
+from tafreegh.matn_matcher import SequentialMatnMatcher
+from tafreegh.workspace_catalog import RuleCatalog, WorkspaceConfig
 
-class TestGetOneDriveFolder(unittest.TestCase):
+class TestResolveOneDriveFolder(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = RuleCatalog.load()
+
     def setUp(self):
-        self.base_path = Path("C:/Users/L/OneDrive/1. دوري")
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.base_path = Path(self._tmp_dir.name)
+        for folder_name in (
+            "1. الاسماء الحسنى",
+            "1. رياض الصالحين",
+            "1. سيرة (الرحيق المختوم)",
+            "1. معاملات",
+            "2. التوحيد",
+            "2. لب الاصول",
+            "ديوان الشافعي",
+            "زاد المعاد",
+            "شرح مختصر الروضة",
+            "صيد الخاطر",
+            "المنطق",
+            "فقه البيوع (سعد الخثلان)",
+        ):
+            (self.base_path / folder_name).mkdir()
+
+    def tearDown(self):
+        self._tmp_dir.cleanup()
 
     def test_known_keywords_mapping(self):
         test_cases = [
@@ -48,9 +67,14 @@ class TestGetOneDriveFolder(unittest.TestCase):
             ("أسماء", "1. الاسماء الحسنى"),
             ("رياض", "1. رياض الصالحين"),
             ("سيرة", "1. سيرة (الرحيق المختوم)"),
+            ("رحيق", "1. سيرة (الرحيق المختوم)"),
+            ("الرحيق", "1. سيرة (الرحيق المختوم)"),
             ("معاملات", "1. معاملات"),
             ("دليل", "1. معاملات"),
+            ("دليل الطالب (كتاب البيع)", "1. معاملات"),
             ("توحيد", "2. التوحيد"),
+            ("فتح", "2. التوحيد"),
+            ("فتح الباري (كتاب التوحيد)", "2. التوحيد"),
             ("لب", "2. لب الاصول"),
             ("لب الاصول", "2. لب الاصول"),
             ("أصول", "2. لب الاصول"),
@@ -64,6 +88,8 @@ class TestGetOneDriveFolder(unittest.TestCase):
             ("صيد", "صيد الخاطر"),
             ("منطق", "المنطق"),
             ("المنطق", "المنطق"),
+            ("سلم", "المنطق"),
+            ("السلم", "المنطق"),
             ("بيوع", "فقه البيوع (سعد الخثلان)"),
             ("البيوع", "فقه البيوع (سعد الخثلان)"),
             ("فقه البيوع", "فقه البيوع (سعد الخثلان)"),
@@ -72,26 +98,30 @@ class TestGetOneDriveFolder(unittest.TestCase):
         ]
         for keyword, expected_folder in test_cases:
             with self.subTest(keyword=keyword):
-                result = get_onedrive_folder(keyword, self.base_path)
+                result = self.catalog.resolve_onedrive_folder(keyword, self.base_path)
                 self.assertEqual(result, self.base_path / expected_folder)
 
     def test_fallback_creates_new_folder(self):
         keyword = "تفسير"
-        result = get_onedrive_folder(keyword, self.base_path)
+        result = self.catalog.resolve_onedrive_folder(keyword, self.base_path)
         self.assertEqual(result, self.base_path / "تفسير")
 
 
 class TestParseMetadata(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.routing_map = RuleCatalog.load().routing_map
+
     def test_extract_metadata_from_standard_header(self):
         sample = """بسم الله الرحمن الرحيم
 اسم المادة: سيرة (الرحيق المختوم)
 2026-09-10
 
 والحمد لله، والصلاة والسلام على رسول الله..."""
-        meta = parse_metadata(sample)
-        self.assertEqual(meta["date"], "2026-09-10")
-        self.assertEqual(meta["keyword"], "سيرة")
-        self.assertEqual(meta["subject_name"], "سيرة (الرحيق المختوم)")
+        meta = LectureIdentity.from_text(sample, routing_map=self.routing_map)
+        self.assertEqual(meta.date, "2026-09-10")
+        self.assertEqual(meta.keyword, "سيرة")
+        self.assertEqual(meta.subject_name, "سيرة (الرحيق المختوم)")
 
     def test_extract_metadata_from_alt_header(self):
         sample = """بسم الله الرحمن الرحيم
@@ -99,34 +129,34 @@ class TestParseMetadata(unittest.TestCase):
 2026-09-18
 
 بسم الله والحمد لله والصلاة والسلام على رسول الله..."""
-        meta = parse_metadata(sample)
-        self.assertEqual(meta["date"], "2026-09-18")
-        self.assertEqual(meta["keyword"], "زاد")
-        self.assertEqual(meta["subject_name"], "زاد المعاد")
+        meta = LectureIdentity.from_text(sample, routing_map=self.routing_map)
+        self.assertEqual(meta.date, "2026-09-18")
+        self.assertEqual(meta.keyword, "زاد")
+        self.assertEqual(meta.subject_name, "زاد المعاد")
 
     def test_extract_metadata_from_filename_token(self):
         sample = "2026-09-12 معاملات.mp3 دليل المصدر والحمد لله والصلاة والسلام..."
-        meta = parse_metadata(sample)
-        self.assertEqual(meta["date"], "2026-09-12")
-        self.assertEqual(meta["keyword"], "معاملات")
+        meta = LectureIdentity.from_text(sample, routing_map=self.routing_map)
+        self.assertEqual(meta.date, "2026-09-12")
+        self.assertEqual(meta.keyword, "معاملات")
 
     def test_canonical_subject_name_for_tawheed(self):
         sample = """بسم الله الرحمن الرحيم
 المادة: توحيد
 2026-09-18
 """
-        meta = parse_metadata(sample)
-        self.assertEqual(meta["subject_name"], "فتح الباري (كتاب التوحيد)")
+        meta = LectureIdentity.from_text(sample, routing_map=self.routing_map)
+        self.assertEqual(meta.subject_name, "فتح الباري (كتاب التوحيد)")
 
     def test_notebooklm_arabic_source_guide_mantiq(self):
         sample = """2026-09-26 منطق.mp3
 دليل المصدر
 بسم الله الرحمن الرحيم الحمد لله رب العالمين..."""
-        meta = parse_metadata(sample)
-        self.assertEqual(meta["date"], "2026-09-26")
-        self.assertEqual(meta["keyword"], "منطق")
-        self.assertEqual(meta["subject_name"], "المنطق (السلم المنورق)")
-        self.assertEqual(meta["audio_file"], "2026-09-26 منطق.mp3")
+        meta = LectureIdentity.from_text(sample, routing_map=self.routing_map)
+        self.assertEqual(meta.date, "2026-09-26")
+        self.assertEqual(meta.keyword, "منطق")
+        self.assertEqual(meta.subject_name, "المنطق (السلم المنورق)")
+        self.assertEqual(meta.audio_file, "2026-09-26 منطق.mp3")
 
     def test_notebooklm_english_source_guide_seerah(self):
         sample = """2026-10-01 سيرة.mp3
@@ -134,31 +164,31 @@ class TestParseMetadata(unittest.TestCase):
 Source guide
 
 الحمد لله رب العالمين..."""
-        meta = parse_metadata(sample)
-        self.assertEqual(meta["date"], "2026-10-01")
-        self.assertEqual(meta["keyword"], "سيرة")
-        self.assertEqual(meta["subject_name"], "سيرة (الرحيق المختوم)")
-        self.assertEqual(meta["audio_file"], "2026-10-01 سيرة.mp3")
+        meta = LectureIdentity.from_text(sample, routing_map=self.routing_map)
+        self.assertEqual(meta.date, "2026-10-01")
+        self.assertEqual(meta.keyword, "سيرة")
+        self.assertEqual(meta.subject_name, "سيرة (الرحيق المختوم)")
+        self.assertEqual(meta.audio_file, "2026-10-01 سيرة.mp3")
 
     def test_notebooklm_sources_tag(self):
         sample = """المصادر
 2026-10-03 معاملات.mp3
 دليل المصدر
 الحمد لله..."""
-        meta = parse_metadata(sample)
-        self.assertEqual(meta["date"], "2026-10-03")
-        self.assertEqual(meta["keyword"], "معاملات")
-        self.assertEqual(meta["subject_name"], "دليل الطالب (كتاب البيع)")
-        self.assertEqual(meta["audio_file"], "2026-10-03 معاملات.mp3")
+        meta = LectureIdentity.from_text(sample, routing_map=self.routing_map)
+        self.assertEqual(meta.date, "2026-10-03")
+        self.assertEqual(meta.keyword, "معاملات")
+        self.assertEqual(meta.subject_name, "دليل الطالب (كتاب البيع)")
+        self.assertEqual(meta.audio_file, "2026-10-03 معاملات.mp3")
 
     def test_numbered_stem_metadata(self):
         sample = "17-فقه_البيوع_17.mp3\nSource guide\nالحمد لله..."
-        meta = parse_metadata(sample)
-        self.assertIsNone(meta["date"])
-        self.assertEqual(meta["lecture_number"], "17")
-        self.assertIn(meta["keyword"], ("فقه_البيوع", "فقه البيوع"))
-        self.assertEqual(meta["subject_name"], "فقه البيوع (سعد الخثلان)")
-        self.assertEqual(meta["audio_file"], "17-فقه_البيوع_17.mp3")
+        meta = LectureIdentity.from_text(sample, routing_map=self.routing_map)
+        self.assertIsNone(meta.date)
+        self.assertEqual(meta.lecture_number, "17")
+        self.assertIn(meta.keyword, ("فقه_البيوع", "فقه البيوع"))
+        self.assertEqual(meta.subject_name, "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(meta.audio_file, "17-فقه_البيوع_17.mp3")
 
     def test_numbered_stem_with_explicit_headers(self):
         sample = """بسم الله الرحمن الرحيم
@@ -166,14 +196,48 @@ Source guide
 المحاضرة: 17
 
 الحمد لله رب العالمين..."""
-        meta = parse_metadata(sample)
-        self.assertIsNone(meta["date"])
-        self.assertEqual(meta["lecture_number"], "17")
-        self.assertEqual(meta["subject_name"], "فقه البيوع (سعد الخثلان)")
+        meta = LectureIdentity.from_text(sample, routing_map=self.routing_map)
+        self.assertIsNone(meta.date)
+        self.assertEqual(meta.lecture_number, "17")
+        self.assertEqual(meta.subject_name, "فقه البيوع (سعد الخثلان)")
+
+    def test_date_followed_by_newline_body_does_not_steal_body_word_as_keyword(self):
+        sample = "بسم الله الرحمن الرحيم\n2026-10-09\n\nالحمد لله رب العالمين"
+        meta = LectureIdentity.from_text(sample, routing_map=self.routing_map)
+        self.assertEqual(meta.date, "2026-10-09")
+        self.assertIsNone(meta.keyword)
+        self.assertIsNone(meta.subject_name)
+
+    def test_from_filename_extracts_underscore_separated_date_and_subject(self):
+        ident = LectureIdentity.from_filename("2026-09-24__رياض.md", routing_map=self.routing_map)
+        self.assertEqual(ident.date, "2026-09-24")
+        self.assertEqual(ident.keyword, "رياض")
+        self.assertEqual(ident.subject_name, "رياض الصالحين")
+        self.assertEqual(ident.stem, "2026-09-24__رياض")
+
+    def test_from_text_step6_ignores_trailing_prose_after_filename_token(self):
+        meta1 = LectureIdentity.from_text(
+            "2026-09-12 معاملات.mp3 شرح زاد المعاد\nالحمد لله",
+            routing_map=self.routing_map,
+        )
+        self.assertEqual(meta1.keyword, "معاملات")
+        self.assertEqual(meta1.subject_name, "دليل الطالب (كتاب البيع)")
+
+        meta2 = LectureIdentity.from_text(
+            "2026-09-12 مجهول.mp3 ثم قال صلى الله عليه وسلم\nالحمد لله",
+            routing_map=self.routing_map,
+        )
+        self.assertEqual(meta2.keyword, "مجهول")
+        self.assertEqual(meta2.subject_name, "مجهول")
 
 
 class TestHeaderFiltering(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.routing_map = RuleCatalog.load().routing_map
+
     def test_is_header_line_notebooklm_tags(self):
+        self.assertIsInstance(NOTEBOOKLM_HEADER_PATTERNS, tuple)
         self.assertTrue(is_header_line("المصادر"))
         self.assertTrue(is_header_line("مصادر"))
         self.assertTrue(is_header_line("دليل المصدر"))
@@ -193,7 +257,7 @@ class TestHeaderFiltering(unittest.TestCase):
 Source guide
 
 الحمد لله رب العالمين، والصلاة والسلام على رسول الله."""
-        clean = standardize_transcript_header(raw)
+        clean = standardize_transcript_header(raw, routing_map=self.routing_map)
         self.assertNotIn("Source guide", clean)
         self.assertNotIn(".mp3", clean)
         self.assertTrue(clean.startswith("بسم الله الرحمن الرحيم\nالمادة: سيرة (الرحيق المختوم)\n2026-10-01"))
@@ -214,7 +278,7 @@ Source guide
 المحاضرة: 17
 
 الحمد لله رب العالمين، والصلاة والسلام على رسول الله."""
-        clean = standardize_transcript_header(raw)
+        clean = standardize_transcript_header(raw, routing_map=self.routing_map)
         self.assertNotIn("Source guide", clean)
         self.assertNotIn(".mp3", clean)
         self.assertTrue(clean.startswith("بسم الله الرحمن الرحيم\nالمادة: فقه البيوع (سعد الخثلان)\nالمحاضرة: 17"))
@@ -228,12 +292,56 @@ Source guide
 
 الحمد لله رب العالمين."""
         override = LectureIdentity(lecture_number="5", subject_name="فقه جديد")
-        clean = standardize_transcript_header(raw, identity=override)
+        clean = standardize_transcript_header(raw, identity=override, routing_map=self.routing_map)
         self.assertTrue(clean.startswith("بسم الله الرحمن الرحيم\nالمادة: فقه جديد\nالمحاضرة: 5"))
         self.assertNotIn("قديم", clean)
 
+    def test_header_resolution_and_create_docx_strip_utf8_bom(self):
+        self.assertTrue(is_header_line("\ufeffبسم الله الرحمن الرحيم"))
+        bom_md = "\ufeffبسم الله الرحمن الرحيم\nالمادة: المنطق (السلم المنورق)\n2026-10-17\n\nالحمد لله."
+        self.assertEqual(strip_header_blocks(bom_md), [["الحمد لله."]])
+        self.assertEqual(strip_header_blocks("\ufeffالحمد لله."), [["الحمد لله."]])
+
+        ident = resolve_document_identity(
+            "\ufeffالمادة: المنطق (السلم المنورق)\nالمحاضرة: 5\n\nالحمد لله.",
+            routing_map=self.routing_map,
+        )
+        self.assertEqual(ident.subject_name, "المنطق (السلم المنورق)")
+        self.assertEqual(ident.lecture_number, "5")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "bom.docx"
+            create_docx(bom_md, out_file)
+            doc = docx.Document(str(out_file))
+            self.assertEqual(
+                [p.text.strip() for p in doc.paragraphs],
+                [
+                    "بسم الله الرحمن الرحيم",
+                    "المادة: المنطق (السلم المنورق)",
+                    "2026-10-17",
+                    "الحمد لله.",
+                ],
+            )
+
 
 class TestCreateDocx(unittest.TestCase):
+    def test_create_docx_uses_workspace_course_routing_path(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            routing_path = root / "course-routing.md"
+            routing_path.write_text(
+                "## توجيه المتون (Routing Map)\n\n"
+                "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
+                "| --- | --- | --- |\n"
+                "| (مخصص) | **مادة مخصصة للاختبار** | متن |\n",
+                encoding="utf-8",
+            )
+            ws = WorkspaceConfig.resolve(project_root=root, course_routing_path=routing_path, env={})
+            out_file = root / "out.docx"
+            create_docx("2026-11-01 مخصص.mp3\n\nالحمد لله رب العالمين.", out_file, workspace=ws)
+            doc = docx.Document(str(out_file))
+            self.assertEqual(doc.paragraphs[1].text, "المادة: مادة مخصصة للاختبار")
+
     def test_create_docx_override_precedence(self):
         sample_md = """بسم الله الرحمن الرحيم
 المادة: قديم
@@ -461,7 +569,11 @@ class TestExportDocuments(unittest.TestCase):
 
 
 
-class TestIsMatchingStem(unittest.TestCase):
+class TestLectureIdentityMatching(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.routing_map = RuleCatalog.load().routing_map
+
     def test_normalize_stem_strips_extensions_and_suffixes(self):
         self.assertEqual(
             normalize_stem("2026-09-19_منطق_(السلم_المنورق)_AI_full.md.md"),
@@ -480,42 +592,129 @@ class TestIsMatchingStem(unittest.TestCase):
             "2026-08-29_لب_الأصول"
         )
 
-    def test_is_matching_stem_standard_match(self):
-        self.assertTrue(is_matching_stem("2026-10-01_سيرة.md", LectureIdentity(date="2026-10-01", keyword="سيرة")))
+    def test_matches_standard_date_stem(self):
+        self.assertTrue(
+            LectureIdentity(date="2026-10-01", keyword="سيرة").matches(
+                "2026-10-01_سيرة.md", routing_map=self.routing_map
+            )
+        )
 
-    def test_is_matching_stem_double_extension(self):
-        self.assertTrue(is_matching_stem("2026-10-01_سيرة.md.md", LectureIdentity(date="2026-10-01", keyword="سيرة")))
+    def test_matches_double_extension(self):
+        self.assertTrue(
+            LectureIdentity(date="2026-10-01", keyword="سيرة").matches(
+                "2026-10-01_سيرة.md.md", routing_map=self.routing_map
+            )
+        )
 
-    def test_is_matching_stem_suffixes_ai_full_and_processed(self):
-        self.assertTrue(is_matching_stem("2026-09-19_منطق_(السلم_المنورق)_AI_full.md", LectureIdentity(date="2026-09-19", keyword="منطق")))
-        self.assertTrue(is_matching_stem("2026-10-01_سيرة_processed.docx", LectureIdentity(date="2026-10-01", keyword="سيرة")))
-        self.assertTrue(is_matching_stem("2026-08-29_لب_الأصول_AI.md", LectureIdentity(date="2026-08-29", keyword="لب")))
+    def test_matches_suffixes_ai_full_and_processed(self):
+        self.assertTrue(
+            LectureIdentity(date="2026-09-19", keyword="منطق").matches(
+                "2026-09-19_منطق_(السلم_المنورق)_AI_full.md", routing_map=self.routing_map
+            )
+        )
+        self.assertTrue(
+            LectureIdentity(date="2026-10-01", keyword="سيرة").matches(
+                "2026-10-01_سيرة_processed.docx", routing_map=self.routing_map
+            )
+        )
+        self.assertTrue(
+            LectureIdentity(date="2026-08-29", keyword="لب").matches(
+                "2026-08-29_لب_الأصول_AI.md", routing_map=self.routing_map
+            )
+        )
 
-    def test_is_matching_stem_chunk_folder_suffix(self):
-        self.assertTrue(is_matching_stem("2026-10-01  سيرة.md_مقاطع", LectureIdentity(date="2026-10-01", keyword="سيرة")))
+    def test_matches_chunk_folder_suffix(self):
+        self.assertTrue(
+            LectureIdentity(date="2026-10-01", keyword="سيرة").matches(
+                "2026-10-01  سيرة.md_مقاطع", routing_map=self.routing_map
+            )
+        )
 
-    def test_is_matching_stem_delimiter_variations(self):
-        self.assertTrue(is_matching_stem("2026-09-24__رياض.md", LectureIdentity(date="2026-09-24", keyword="رياض")))
-        self.assertTrue(is_matching_stem("2026-09-24  رياض.md", LectureIdentity(date="2026-09-24", keyword="رياض")))
+    def test_matches_delimiter_variations(self):
+        self.assertTrue(
+            LectureIdentity(date="2026-09-24", keyword="رياض").matches(
+                "2026-09-24__رياض.md", routing_map=self.routing_map
+            )
+        )
+        self.assertTrue(
+            LectureIdentity(date="2026-09-24", keyword="رياض").matches(
+                "2026-09-24  رياض.md", routing_map=self.routing_map
+            )
+        )
 
-    def test_is_matching_stem_different_keyword_rejects(self):
-        self.assertFalse(is_matching_stem("2026-09-19_منطق_AI.md", LectureIdentity(date="2026-09-19", keyword="سيرة")))
+    def test_matches_different_keyword_rejects(self):
+        self.assertFalse(
+            LectureIdentity(date="2026-09-19", keyword="سيرة").matches(
+                "2026-09-19_منطق_AI.md", routing_map=self.routing_map
+            )
+        )
 
-    def test_is_matching_stem_different_date_rejects(self):
-        self.assertFalse(is_matching_stem("2026-09-20_سيرة.md", LectureIdentity(date="2026-09-19", keyword="سيرة")))
+    def test_matches_different_date_rejects(self):
+        self.assertFalse(
+            LectureIdentity(date="2026-09-19", keyword="سيرة").matches(
+                "2026-09-20_سيرة.md", routing_map=self.routing_map
+            )
+        )
 
-    def test_is_matching_stem_numbered_stem(self):
-        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="بيوع", stem="17-فقه_البيوع_17")))
-        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="بيوع", lecture_number="17")))
-        self.assertTrue(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(date="17", keyword="بيوع")))
-        self.assertTrue(is_matching_stem("17-فقه_البيوع_17_AI.md", LectureIdentity(keyword="فقه_البيوع", lecture_number="17")))
-        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="بيوع", lecture_number="18")))
-        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="رياض", lecture_number="17")))
+    def test_matches_date_with_keyword_rejects_empty_keyword_candidate(self):
+        self.assertFalse(
+            LectureIdentity(date="2026-09-24", keyword="رياض").matches(
+                "2026-09-24.md", routing_map=self.routing_map
+            )
+        )
 
-    def test_is_matching_stem_numbered_stem_requires_target_num(self):
+    def test_matches_numbered_stem_and_aliases(self):
+        self.assertTrue(
+            LectureIdentity(keyword="بيوع", stem="17-فقه_البيوع_17").matches(
+                "17-فقه_البيوع_17.md", routing_map=self.routing_map
+            )
+        )
+        self.assertTrue(
+            LectureIdentity(keyword="بيوع", lecture_number="17").matches(
+                "17-فقه_البيوع_17.md", routing_map=self.routing_map
+            )
+        )
+        self.assertTrue(
+            LectureIdentity(date="17", keyword="بيوع").matches(
+                "17-فقه_البيوع_17.md", routing_map=self.routing_map
+            )
+        )
+        self.assertTrue(
+            LectureIdentity(keyword="فقه_البيوع", lecture_number="17").matches(
+                "17-فقه_البيوع_17_AI.md", routing_map=self.routing_map
+            )
+        )
+        self.assertFalse(
+            LectureIdentity(keyword="بيوع", lecture_number="18").matches(
+                "17-فقه_البيوع_17.md", routing_map=self.routing_map
+            )
+        )
+        self.assertFalse(
+            LectureIdentity(keyword="رياض", lecture_number="17").matches(
+                "17-فقه_البيوع_17.md", routing_map=self.routing_map
+            )
+        )
+
+    def test_matches_numbered_stem_requires_target_num(self):
         # A numbered candidate must NOT match when no target_num or stem is provided
-        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="بيوع")))
-        self.assertFalse(is_matching_stem("17-فقه_البيوع_17.md", LectureIdentity(keyword="فقه البيوع")))
+        self.assertFalse(
+            LectureIdentity(keyword="بيوع").matches("17-فقه_البيوع_17.md", routing_map=self.routing_map)
+        )
+        self.assertFalse(
+            LectureIdentity(keyword="فقه البيوع").matches("17-فقه_البيوع_17.md", routing_map=self.routing_map)
+        )
+
+    def test_matches_ignores_empty_or_whitespace_keyword(self):
+        self.assertFalse(
+            LectureIdentity(lecture_number="17", keyword="   ").matches(
+                "17-رياض-17.md", routing_map=self.routing_map
+            )
+        )
+        self.assertFalse(
+            LectureIdentity(lecture_number="17", keyword="_").matches(
+                "17_رياض.docx", routing_map=self.routing_map
+            )
+        )
 
 
 class TestExportNumberedDocuments(unittest.TestCase):
@@ -618,65 +817,308 @@ Source guide
             project_file = results["project_file"]
             self.assertIn("5-ديوان_الشافعي_5_AI.md", project_file.name)
 
+    def test_export_documents_numbered_override_supersedes_parsed_date_in_filenames(self):
+        with tempfile.TemporaryDirectory() as tmp_root, tempfile.TemporaryDirectory() as tmp_onedrive:
+            root_path = Path(tmp_root)
+            onedrive_base = Path(tmp_onedrive)
+            raw_dir = root_path / "02_Raw_Inputs"
+            raw_dir.mkdir(parents=True)
+            raw_file = raw_dir / "2026-01-01_قديم.md"
+            transcript = "بسم الله الرحمن الرحيم\nالمادة: قديم\n2026-01-01\n\nالحمد لله رب العالمين."
+            raw_file.write_text(transcript, encoding="utf-8")
+            override = LectureIdentity(lecture_number="5", subject_name="فقه جديد")
 
-class TestExportDocxHelpers(unittest.TestCase):
-    def test_extract_candidate_query_strips_outer_parentheses(self):
-        self.assertEqual(_extract_candidate_query("(مبادئ كل علم)"), "مبادئ كل علم")
-        self.assertEqual(_extract_candidate_query(" (مبادئ كل علم) "), "مبادئ كل علم")
-        self.assertEqual(_extract_candidate_query("مبادئ كل علم"), "مبادئ كل علم")
-        self.assertEqual(_extract_candidate_query("((متداخل))"), "(متداخل)")
+            results = export_documents(
+                transcript,
+                original_md_path=raw_file,
+                identity=override,
+                base_onedrive=onedrive_base,
+                project_root=root_path,
+            )
+            self.assertEqual(results["onedrive_file"].name, "5-فقه_جديد_5.docx")
+            self.assertEqual(results["project_file"].name, "5-فقه_جديد_5_AI.md")
 
-    def test_format_segment_output_primary(self):
-        res = MatnMatchResult(
-            mode=MatchMode.PRIMARY,
-            text="مَبَادِئُ كُلِّ عِلْمٍ",
-            start_pos=0,
-            end_pos=20,
-            is_fallback=False
+
+class TestPublicationOrchestratorAndInterleaving(unittest.TestCase):
+    def _build_temp_workspace(
+        self,
+        tmp_dir: str,
+        *,
+        folder_name: str = "1. رياض الصالحين",
+        dialect_rules_text: str | None = None,
+    ) -> tuple[Path, Path, Path, Path, WorkspaceConfig]:
+        root = Path(tmp_dir) / "repo"
+        onedrive = Path(tmp_dir) / "onedrive"
+        matn_dir = root / "01_Matn_Sources"
+        raw_dir = root / "02_Raw_Inputs"
+        matn_dir.mkdir(parents=True)
+        raw_dir.mkdir(parents=True)
+        (onedrive / folder_name).mkdir(parents=True)
+        dialect_path: Path | None = None
+        if dialect_rules_text is not None:
+            dialect_path = root / "dialect-rules.md"
+            dialect_path.write_text(dialect_rules_text, encoding="utf-8")
+        ws = WorkspaceConfig.resolve(
+            project_root=root,
+            onedrive_base=onedrive,
+            dialect_rules_path=dialect_path,
+            env={},
         )
-        self.assertEqual(_format_segment_output(res, is_standalone=True), ["**(مَبَادِئُ كُلِّ عِلْمٍ)**"])
-        self.assertEqual(_format_segment_output(res, is_standalone=False), "**(مَبَادِئُ كُلِّ عِلْمٍ)**")
+        return root, onedrive, matn_dir, raw_dir, ws
 
-    def test_format_segment_output_sandwiched_fallback(self):
-        res = MatnMatchResult(
+    def test_interleave_matn_segments_handles_primary_sandwiched_and_isolated_dialect(self):
+        matn_source = (
+            "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ ... "
+            "وَنِسْبَةٌ وَفَضْلُهُ وَالوَاضِعْ"
+        )
+        matcher = SequentialMatnMatcher(matn_source)
+        catalog = RuleCatalog.load()
+        markdown = (
+            "<!-- fallback -->\n"
+            "**(ده كلام عامي خالص مش كدا؟)**\n\n"
+            "**((ان مبادئ كل علم عشره))**\n\n"
+            "**(سقط من المطبوعة لكنه فصيح)**\n\n"
+            "شرح بين الأبيات فيه **((ونسبه وفضله والواضع))** وفيه **(ده كلام عامي جوه السطر مش كدا؟)**."
+        )
+
+        interleaved = interleave_matn_segments(markdown, matcher, catalog=catalog)
+        # Isolated colloquial fallback fails Conservative Doubt -> unbolded
+        self.assertIn("(ده كلام عامي خالص مش كدا؟)", interleaved)
+        self.assertNotIn("**(ده كلام عامي خالص مش كدا؟)**", interleaved)
+        # Primary matches receive full canonical tashkeel and strip outer extra parens
+        self.assertIn("**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**", interleaved)
+        self.assertIn("**(وَنِسْبَةٌ وَفَضْلُهُ وَالوَاضِعْ)**", interleaved)
+        # Sandwiched classical fallback between two primary matches stays bolded with fallback comment
+        self.assertIn("<!-- fallback -->\n**(سقط من المطبوعة لكنه فصيح)**", interleaved)
+        # Inline colloquial fallback after last primary is unbolded
+        self.assertIn("(ده كلام عامي جوه السطر مش كدا؟)", interleaved)
+        self.assertNotIn("**(ده كلام عامي جوه السطر مش كدا؟)**", interleaved)
+
+    def test_verify_isolated_segment_strips_tashkeel_and_preserves_source_anchored_compound(self):
+        catalog = RuleCatalog.load()
+        self.assertFalse(verify_isolated_segment("دَهْ كَلَام مِشْ كِدَا", catalog=catalog))
+
+        # Compound Sharh-Matn anchored in source remains bolded even with colloquial Sharh prefix
+        matn_source = "بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ"
+        matcher = SequentialMatnMatcher(matn_source)
+        interleaved = interleave_matn_segments(
+            "**الشرح ده في قوله: بسم الله الرحمن الرحيم**",
+            matcher,
+            catalog=catalog,
+        )
+        self.assertIn("**(الشرح ده في قوله: بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ)**", interleaved)
+
+    def test_interleave_matn_segments_collapses_multiline_newlines(self):
+        from tafreegh.export_docx import _format_inline_segment, _format_standalone_segment
+        from tafreegh.matn_matcher import MatchMode, MatnMatchResult
+
+        matn_source = "إِنَّ مَبَادِئَ\n\nكُلِّ عِلْمٍ عَشَرَهْ"
+        matcher = SequentialMatnMatcher(matn_source)
+        catalog = RuleCatalog.load()
+        markdown = "**(ان مبادئ كل علم عشره)**\n\nشرح فيه **(ان مبادئ كل علم عشره)** هنا."
+        interleaved = interleave_matn_segments(markdown, matcher, catalog=catalog)
+        self.assertEqual(
+            interleaved,
+            "**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**\n\nشرح فيه **(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)** هنا.",
+        )
+
+        fb_res = MatnMatchResult(
             mode=MatchMode.FALLBACK,
-            text="سقط من المتن",
+            text="سقط\r\n\r\nمن المطبوعة",
             start_pos=-1,
             end_pos=-1,
             is_fallback=True,
-            is_sandwiched=True
+            is_sandwiched=True,
         )
         self.assertEqual(
-            _format_segment_output(res, is_standalone=True),
-            ["<!-- fallback -->", "**(سقط من المتن)**"]
+            _format_standalone_segment(fb_res, catalog),
+            ["<!-- fallback -->", "**(سقط من المطبوعة)**"],
         )
         self.assertEqual(
-            _format_segment_output(res, is_standalone=False),
-            "<!-- fallback --> **(سقط من المتن)**"
+            _format_inline_segment(fb_res, catalog),
+            "<!-- fallback --> **(سقط من المطبوعة)**",
         )
 
-    def test_format_segment_output_isolated_dialect_fallback(self):
-        # Dialect segment without sandwiching fails verification -> unbolded
-        res = MatnMatchResult(
-            mode=MatchMode.FALLBACK,
-            text="ده كلام عامي خالص مش كدا؟",
-            start_pos=-1,
-            end_pos=-1,
-            is_fallback=True,
-            is_sandwiched=False
+    def test_extract_candidate_query_preserves_unbalanced_inner_parens_and_strips_trailing_period(self):
+        self.assertEqual(_extract_candidate_query("(وَلَا) بَيْعُ (مَنْزُوعِ)"), "(وَلَا) بَيْعُ (مَنْزُوعِ)")
+        self.assertEqual(_extract_candidate_query("(وَلَا) بَيْعُ (مَنْزُوعِ)."), "(وَلَا) بَيْعُ (مَنْزُوعِ).")
+        self.assertEqual(_extract_candidate_query("(مَتْنٌ)."), "مَتْنٌ")
+        self.assertEqual(_extract_candidate_query("(قَالَ (تَعَالَى) كَذَا)"), "قَالَ (تَعَالَى) كَذَا")
+        self.assertEqual(_extract_candidate_query("(أ (ب)"), "(أ (ب)")
+
+        matcher = SequentialMatnMatcher("مَتْنٌ كَرِيمٌ")
+        catalog = RuleCatalog.load()
+        out = interleave_matn_segments("**(متن).**\n\n**(وَلَا) بَيْعُ (مَنْزُوعِ)**", matcher, catalog=catalog)
+        self.assertIn("**(مَتْنٌ)**", out)
+        self.assertIn("**((وَلَا) بيع (مَنْزُوعِ))**", out)
+
+    def test_format_thousands_handles_arabic_prefixes_without_false_matches(self):
+        self.assertEqual(
+            format_thousands("بـ 1000 جنيه و بـ1000 و بـ 2000 و ال 1000 جنيه و الـ 1000 و الـ2000 و ال 2000"),
+            "بألف جنيه و بألف و بألفين و الألف جنيه و الألف و الألفين و الألفين",
         )
         self.assertEqual(
-            _format_segment_output(res, is_standalone=True),
-            ["(ده كلام عامي خالص مش كدا؟)"]
+            format_thousands("قال 1000 مرة و 1000 و 2000 و 5000 و 10000 و 11000 و 30000"),
+            "قال ألف مرة و ألف و ألفين و 5 آلاف و 10 آلاف و 11 ألف و 30 ألف",
         )
-        self.assertEqual(
-            _format_segment_output(res, is_standalone=False),
-            "(ده كلام عامي خالص مش كدا؟)"
-        )
+
+    def test_orchestrator_separates_prepare_emit_and_explicit_archive_phases(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, _, matn_dir, raw_dir, ws = self._build_temp_workspace(tmpdir)
+
+            matn_file = matn_dir / "2026-10-22__رياض.md"
+            matn_file.write_text("بَابُ الْإِخْلَاصِ", encoding="utf-8")
+            raw_file = raw_dir / "2026-10-22__رياض.md"
+            raw_text = (
+                "2026-10-22 رياض.mp3\nSource guide\n\n"
+                "**`(باب الإخلاص)`**\n\n"
+                "**(سقط من المطبوعة)**\n\n"
+                "المبلغ 5000 جنيه ولفظ `مقحم`، والحمد لله."
+            )
+            raw_file.write_text(raw_text, encoding="utf-8")
+            chunk_dir = raw_dir / "2026-10-22__رياض.md_مقاطع"
+            chunk_dir.mkdir()
+            (chunk_dir / "part1.txt").write_text("chunk", encoding="utf-8")
+
+            orchestrator = PublicationOrchestrator(workspace=ws)
+
+            prepared = orchestrator.prepare_transcript(raw_text, original_md_path=raw_file)
+            self.assertNotIn("Source guide", prepared.clean_markdown)
+            self.assertNotIn("`", prepared.clean_markdown)
+            self.assertTrue(
+                prepared.clean_markdown.startswith("بسم الله الرحمن الرحيم\nالمادة: رياض الصالحين\n2026-10-22")
+            )
+            self.assertIn("بَابُ الْإِخْلَاصِ", prepared.clean_markdown)
+            self.assertIn("5 آلاف", prepared.clean_markdown)
+            self.assertTrue(matn_file.exists())
+            self.assertTrue(raw_file.exists())
+
+            rendered = orchestrator.emit_deliverables(prepared)
+            self.assertTrue(rendered.onedrive_file.exists())
+            self.assertTrue(rendered.project_file.exists())
+            ai_text = rendered.project_file.read_text(encoding="utf-8")
+            self.assertIn("<!-- fallback -->", ai_text)
+            self.assertIn("### تقرير المتن الهجين (Dynamic Fallback Interleaving Summary)", ai_text)
+            self.assertNotIn("`", ai_text)
+
+            docx_text = extract_text(rendered.onedrive_file)
+            self.assertNotIn("<!-- fallback -->", docx_text)
+            self.assertNotIn("### تقرير المتن الهجين", docx_text)
+            inspected = inspect_docx(rendered.onedrive_file)
+            self.assertEqual(inspected.paragraphs[0].text, "بسم الله الرحمن الرحيم")
+            self.assertEqual(inspected.paragraphs[1].text, "المادة: رياض الصالحين")
+
+            # Emission alone must NOT move or delete input files
+            self.assertTrue(matn_file.exists())
+            self.assertTrue(raw_file.exists())
+            self.assertTrue(chunk_dir.exists())
+
+            # Collision-safe #AI and #AI (1) naming vs in-place overwrite
+            second = orchestrator.emit_deliverables(prepared, overwrite=False)
+            self.assertEqual(second.onedrive_file.name, "2026-10-22 #AI.docx")
+            third = orchestrator.emit_deliverables(prepared, overwrite=False)
+            self.assertEqual(third.onedrive_file.name, "2026-10-22 #AI (1).docx")
+            replaced = orchestrator.emit_deliverables(prepared, overwrite=True)
+            self.assertEqual(replaced.onedrive_file.name, "2026-10-22.docx")
+
+            # Explicit archive step moves inputs to processed/ and deletes chunks
+            archived = orchestrator.archive_inputs(prepared.identity)
+            self.assertEqual(len(archived["matn_files"]), 1)
+            self.assertEqual(len(archived["raw_files"]), 1)
+            self.assertFalse(matn_file.exists())
+            self.assertFalse(raw_file.exists())
+            self.assertFalse(chunk_dir.exists())
+            self.assertTrue((matn_dir / "processed" / "2026-10-22__رياض.md").exists())
+            self.assertTrue((raw_dir / "processed" / "2026-10-22__رياض.md").exists())
+
+    def test_orchestrator_publish_supports_deferred_archiving_explicit_inputs_and_error_safety(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root, onedrive, matn_dir, raw_dir, ws = self._build_temp_workspace(
+                tmpdir,
+                folder_name="المنطق",
+            )
+            raw_file = raw_dir / "2026-10-17__منطق.md"
+            raw_text = "بسم الله الرحمن الرحيم\nالمادة: المنطق (السلم المنورق)\n2026-10-17\n\nالحمد لله."
+            raw_file.write_text(raw_text, encoding="utf-8")
+
+            custom_matn = Path(tmpdir) / "external_matn.md"
+            custom_matn.write_text("إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ", encoding="utf-8")
+
+            orchestrator = PublicationOrchestrator(workspace=ws)
+            res = orchestrator.publish(
+                "2026-10-17 منطق.mp3\n\n**(ان مبادئ كل علم عشره)**",
+                original_md_path=raw_file,
+                matn_source_path=custom_matn,
+                identity=LectureIdentity(date="2026-10-18", keyword="منطق"),
+                archive=False,
+            )
+            self.assertIsNone(res["archived"])
+            self.assertTrue(raw_file.exists())
+            self.assertEqual(res["onedrive_file"].name, "2026-10-18.docx")
+            self.assertIn("إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ", res["project_file"].read_text(encoding="utf-8"))
+
+            # Corrupt template aborts before archiving inputs
+            corrupt_template = root / "corrupt_template.docx"
+            corrupt_template.write_text("not a zip", encoding="utf-8")
+            broken_ws = WorkspaceConfig.resolve(
+                project_root=root,
+                onedrive_base=onedrive,
+                word_base_template=corrupt_template,
+                env={},
+            )
+            broken_orchestrator = PublicationOrchestrator(workspace=broken_ws)
+            with self.assertRaises(DocxArchiveError):
+                broken_orchestrator.publish(raw_text, original_md_path=raw_file, archive=True)
+            self.assertTrue(raw_file.exists())
+            self.assertFalse((matn_dir / "processed").exists())
+
+    def test_export_documents_and_cli_support_numeric_lecture_date_and_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root, onedrive, _, raw_dir, _ = self._build_temp_workspace(
+                tmpdir,
+                folder_name="2. فقه البيوع",
+            )
+            raw_file = raw_dir / "sample.md"
+            raw_file.write_text("الحمد لله رب العالمين.", encoding="utf-8")
+
+            res = export_documents(
+                "الحمد لله رب العالمين.",
+                original_md_path=raw_file,
+                keyword="بيوع",
+                date="17",
+                base_onedrive=onedrive,
+                project_root=root,
+            )
+            self.assertEqual(res["onedrive_file"].name, "17-فقه_البيوع_سعد_الخثلان_17.docx")
+            self.assertEqual(inspect_docx(res["onedrive_file"]).paragraphs[2].text, "المحاضرة: 17")
+
+            missing_rc = export_main([str(Path(tmpdir) / "does_not_exist.md")])
+            self.assertEqual(missing_rc, 1)
+
+            cli_md = Path(tmpdir) / "2026-10-25__بيوع.md"
+            cli_md.write_text("بسم الله الرحمن الرحيم\nالمادة: فقه البيوع (سعد الخثلان)\n2026-10-25\n\nالحمد لله.", encoding="utf-8")
+            ws_env = WorkspaceConfig.resolve(project_root=root, onedrive_base=onedrive, env={})
+            first_out = PublicationOrchestrator(workspace=ws_env).publish(
+                cli_md.read_text(encoding="utf-8"),
+                original_md_path=cli_md,
+                archive=False,
+            )
+            self.assertEqual(first_out["onedrive_file"].name, "2026-10-25.docx")
+            self.assertTrue(first_out["onedrive_file"].exists())
+            reexport_same = PublicationOrchestrator(workspace=ws_env).publish(
+                "بسم الله الرحمن الرحيم\nالمادة: فقه البيوع (سعد الخثلان)\n2026-10-25\n\nمعدل.",
+                overwrite=True,
+                archive=False,
+            )
+            self.assertEqual(reexport_same["onedrive_file"].name, "2026-10-25.docx")
+            self.assertIn("معدل", extract_text(reexport_same["onedrive_file"]))
 
 
 class TestLectureIdentity(unittest.TestCase):
-    def test_lecture_identity_fields_and_mapping_protocol(self):
+    def test_lecture_identity_is_frozen_and_drops_dict_emulation(self):
+        from collections.abc import Mapping
+        from dataclasses import FrozenInstanceError
+
         ident = LectureIdentity(
             date="2026-10-09",
             lecture_number="17",
@@ -689,22 +1131,22 @@ class TestLectureIdentity(unittest.TestCase):
         self.assertEqual(ident.date, "2026-10-09")
         self.assertEqual(ident.lecture_number, "17")
         self.assertEqual(ident.keyword, "بيوع")
+        self.assertEqual(ident.subject_name, "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(ident.audio_file, "17-فقه_البيوع_17.mp3")
+        self.assertEqual(ident.stem, "17-فقه_البيوع_17")
 
-        # Dict / Mapping access
-        self.assertEqual(ident["date"], "2026-10-09")
-        self.assertEqual(ident.get("keyword"), "بيوع")
-        self.assertEqual(ident.get("missing", "default_val"), "default_val")
-        self.assertIn("lecture_number", ident)
-        # Methods must not be exposed as dictionary keys
-        self.assertNotIn("matches", ident)
-        self.assertNotIn("get", ident)
-        self.assertEqual(ident.get("matches", "fallback"), "fallback")
-        with self.assertRaises(KeyError):
-            _ = ident["matches"]
+        # Strict immutability forbids in-place attribute mutation
+        with self.assertRaises(FrozenInstanceError):
+            ident.date = "2026-10-10"  # type: ignore[misc]
+        with self.assertRaises(FrozenInstanceError):
+            ident.keyword = "فقه_البيوع"  # type: ignore[misc]
 
-        # Mutability via mapping protocol
-        ident["keyword"] = "فقه_البيوع"
-        self.assertEqual(ident.keyword, "فقه_البيوع")
+        # Dictionary-emulation methods and protocol are completely absent
+        self.assertNotIsInstance(ident, Mapping)
+        for attr in ("__getitem__", "__setitem__", "__contains__", "get", "items", "keys", "values"):
+            self.assertFalse(hasattr(ident, attr), f"Dict shim {attr} must be removed")
+        with self.assertRaises(TypeError):
+            _ = ident["date"]  # type: ignore[index]
 
     def test_lecture_identity_header_line_3(self):
         # 1. Date precedence
@@ -718,6 +1160,17 @@ class TestLectureIdentity(unittest.TestCase):
         # 3. Fallback when neither is present
         ident_none = LectureIdentity()
         self.assertEqual(ident_none.header_line_3, "تاريخ_غير_محدد")
+
+    def test_lecture_identity_header_lines_renders_canonical_triple(self):
+        ident = LectureIdentity(lecture_number="17", subject_name="فقه البيوع (سعد الخثلان)")
+        self.assertEqual(
+            ident.header_lines,
+            (
+                "بسم الله الرحمن الرحيم",
+                "المادة: فقه البيوع (سعد الخثلان)",
+                "المحاضرة: 17",
+            ),
+        )
 
     def test_lecture_identity_resolved_stem(self):
         # 1. Explicit stem
@@ -755,9 +1208,44 @@ class TestLectureIdentity(unittest.TestCase):
         self.assertEqual(merged_num.date, "2026-10-09")
 
         # Document resolution prioritizes explicit numbered lecture override over parsed date
-        resolved = resolve_document_identity("بسم الله الرحمن الرحيم\n2026-10-09", override)
+        # without mutating base_date or override
+        routing_map = RuleCatalog.load().routing_map
+        path_num = LectureIdentity.from_filename("17-فقه_البيوع_17.md", routing_map=routing_map)
+        resolved_from_path = resolve_document_identity(
+            "بسم الله الرحمن الرحيم\n2026-10-09",
+            path_identity=path_num,
+            routing_map=routing_map,
+        )
+        self.assertEqual(resolved_from_path.lecture_number, "17")
+        self.assertIsNone(resolved_from_path.date)
+        self.assertEqual(resolved_from_path.subject_name, "فقه البيوع (سعد الخثلان)")
+
+        resolved = resolve_document_identity(
+            "بسم الله الرحمن الرحيم\n2026-10-09",
+            override,
+            path_identity=path_num,
+            routing_map=routing_map,
+        )
         self.assertEqual(resolved.lecture_number, "2")
         self.assertIsNone(resolved.date)
+        self.assertIsNone(resolved.stem)
+        self.assertEqual(resolved.resolved_stem, "2-سيرة_الرحيق_المختوم_2")
+        self.assertEqual(resolved.subject_name, "سيرة (الرحيق المختوم)")
+        self.assertEqual(base_date.date, "2026-10-09")
+        self.assertIsNone(override.date)
+
+        # Higher-precedence override must clear stale stem parsed from path_identity too
+        path_date_stem = LectureIdentity.from_filename("2026-01-01_قديم.md", routing_map=routing_map)
+        override_num = LectureIdentity(lecture_number="5", subject_name="فقه جديد")
+        resolved_num = resolve_document_identity(
+            "بسم الله الرحمن الرحيم\nالمادة: قديم\n2026-01-01",
+            override_num,
+            path_identity=path_date_stem,
+            routing_map=routing_map,
+        )
+        self.assertIsNone(resolved_num.date)
+        self.assertIsNone(resolved_num.stem)
+        self.assertEqual(resolved_num.resolved_stem, "5-فقه_جديد_5")
 
     def test_lecture_identity_matching_date_and_numbered(self):
         # Date match
@@ -772,91 +1260,145 @@ class TestLectureIdentity(unittest.TestCase):
         self.assertFalse(ident_num.matches("18-فقه_البيوع_18.md"))
 
     def test_lecture_identity_matching_with_subject_name_only(self):
-        # Identity instantiated with only subject_name (no keyword) must derive tokens and match stems
+        # Identity instantiated with only subject_name derives direct tokens; catalog routing_map enables aliases
+        routing_map = RuleCatalog.load().routing_map
         ident_subj = LectureIdentity(lecture_number="17", subject_name="فقه البيوع (سعد الخثلان)")
         self.assertTrue(ident_subj.matches("17-فقه_البيوع_17.md"))
-        self.assertTrue(ident_subj.matches("17-بيوع-17.docx"))
+        self.assertTrue(ident_subj.matches("17-بيوع-17.docx", routing_map=routing_map))
         self.assertFalse(ident_subj.matches("18-فقه_البيوع_18.md"))
         self.assertFalse(ident_subj.matches("17-رياض-17.md"))
 
 
 
 class TestCanonicalRoutingSSOT(unittest.TestCase):
-    def test_canonical_routing_loads_from_context_md(self):
-        self.assertGreater(len(CANONICAL_SUBJECT_NAMES), 30)
-        # Verify core subjects are mapped dynamically from CONTEXT.md
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("بيوع"), "فقه البيوع (سعد الخثلان)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("خثلان"), "فقه البيوع (سعد الخثلان)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("فقه_البيوع"), "فقه البيوع (سعد الخثلان)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("سيرة"), "سيرة (الرحيق المختوم)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("رحيق"), "سيرة (الرحيق المختوم)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("منطق"), "المنطق (السلم المنورق)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("سلم"), "المنطق (السلم المنورق)")
-        self.assertEqual(CANONICAL_SUBJECT_NAMES.get("زاد"), "زاد المعاد")
+    def test_canonical_routing_loads_from_course_routing_md(self):
+        catalog = RuleCatalog.load()
+        self.assertGreater(len(catalog.routing_map), 30)
+        # Verify core subjects are mapped dynamically from references/course-routing.md
+        self.assertEqual(catalog.routing_map.get("بيوع"), "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(catalog.routing_map.get("خثلان"), "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(catalog.routing_map.get("فقه_البيوع"), "فقه البيوع (سعد الخثلان)")
+        self.assertEqual(catalog.routing_map.get("سيرة"), "سيرة (الرحيق المختوم)")
+        self.assertEqual(catalog.routing_map.get("رحيق"), "سيرة (الرحيق المختوم)")
+        self.assertEqual(catalog.routing_map.get("منطق"), "المنطق (السلم المنورق)")
+        self.assertEqual(catalog.routing_map.get("سلم"), "المنطق (السلم المنورق)")
+        self.assertEqual(catalog.routing_map.get("زاد"), "زاد المعاد")
 
     def test_load_canonical_routing_from_custom_table(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            custom_context = Path(tmp_dir) / "CONTEXT.md"
-            custom_context.write_text(
-                "## 3. توجيه المتون (Routing Map)\n\n"
+            custom_routing = Path(tmp_dir) / "course-routing.md"
+            custom_routing.write_text(
+                "## توجيه المتون (Routing Map)\n\n"
                 "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
                 "| --- | --- | --- |\n"
-                "| `(عقيدة)` / `(واسطية)` | **العقيدة الواسطية** | الواسطية لشيخ الإسلام |\n",
+                "| (عقيدة) / (واسطية) | **العقيدة الواسطية** | الواسطية لشيخ الإسلام |\n",
                 encoding="utf-8"
             )
-            routing = load_canonical_routing(custom_context)
-            self.assertEqual(routing.get("عقيدة"), "العقيدة الواسطية")
-            self.assertEqual(routing.get("واسطية"), "العقيدة الواسطية")
-            self.assertEqual(routing.get("العقيدة"), "العقيدة الواسطية")
-            self.assertEqual(routing.get("الواسطية"), "العقيدة الواسطية")
+            catalog = RuleCatalog.load(course_routing_path=custom_routing)
+            self.assertEqual(catalog.routing_map.get("عقيدة"), "العقيدة الواسطية")
+            self.assertEqual(catalog.routing_map.get("واسطية"), "العقيدة الواسطية")
+            self.assertEqual(catalog.routing_map.get("العقيدة"), "العقيدة الواسطية")
+            self.assertEqual(catalog.routing_map.get("الواسطية"), "العقيدة الواسطية")
 
     def test_load_canonical_routing_with_swapped_columns(self):
         # Table where subject column comes first, keywords second
         with tempfile.TemporaryDirectory() as tmp_dir:
-            custom_context = Path(tmp_dir) / "CONTEXT.md"
-            custom_context.write_text(
-                "## 3. توجيه المتون (Routing Map)\n\n"
+            custom_routing = Path(tmp_dir) / "course-routing.md"
+            custom_routing.write_text(
+                "## توجيه المتون (Routing Map)\n\n"
                 "| المادة المعتمدة | الكلمة الدلالية |\n"
                 "| --- | --- |\n"
-                "| **أصول الفقه** | `(أصول)` / `(ورقات)` |\n",
+                "| **أصول الفقه** | (أصول) / (ورقات) |\n",
                 encoding="utf-8"
             )
-            routing = load_canonical_routing(custom_context)
-            self.assertEqual(routing.get("أصول"), "أصول الفقه")
-            self.assertEqual(routing.get("ورقات"), "أصول الفقه")
-            self.assertEqual(routing.get("أصول الفقه"), "أصول الفقه")
+            catalog = RuleCatalog.load(course_routing_path=custom_routing)
+            self.assertEqual(catalog.routing_map.get("أصول"), "أصول الفقه")
+            self.assertEqual(catalog.routing_map.get("ورقات"), "أصول الفقه")
+            self.assertEqual(catalog.routing_map.get("أصول الفقه"), "أصول الفقه")
+
+    def test_export_documents_uses_injected_workspace_and_custom_catalog(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "repo"
+            onedrive = Path(tmp_dir) / "onedrive"
+            root.mkdir()
+            (onedrive / "العقيدة الواسطية").mkdir(parents=True)
+            (root / "01_Matn_Sources").mkdir(parents=True)
+            (root / "01_Matn_Sources" / "2026-11-01__واسطية.md").write_text(
+                "الْحَمْدُ لِلَّهِ الَّذِي أَرْسَلَ رَسُولَهُ",
+                encoding="utf-8",
+            )
+            custom_routing = root / "course-routing.md"
+            custom_routing.write_text(
+                "## توجيه المتون (Routing Map)\n\n"
+                "| الكلمة الدلالية | المادة المعتمدة | المتن ومصدره |\n"
+                "| --- | --- | --- |\n"
+                "| (عقيدة) / (واسطية) | **العقيدة الواسطية** | الواسطية |\n",
+                encoding="utf-8",
+            )
+            custom_dialect = root / "dialect-rules.md"
+            custom_dialect.write_text(
+                "## Attendee Anonymization (فلان)\n"
+                "- **Preserved Titles & Kunyas**: أخوكم فلان، أبو فلان، الشيخ فلان.\n"
+                "- **Preserved Non-Attendee Names**: (زيد).\n"
+                "## Colloquial Lexicon & Verbal Markers\n- **عامية_مخصصة**\n",
+                encoding="utf-8",
+            )
+            ws = WorkspaceConfig.resolve(
+                project_root=root,
+                onedrive_base=onedrive,
+                course_routing_path=custom_routing,
+                dialect_rules_path=custom_dialect,
+                env={},
+            )
+            res = export_documents(
+                "2026-11-01 واسطية.mp3\n\nالحمد لله رب العالمين.\n\n**(كلام فيه عامية_مخصصة جدا)**",
+                workspace=ws,
+            )
+            self.assertEqual(res["onedrive_file"].parent, onedrive / "العقيدة الواسطية")
+            doc = docx.Document(str(res["onedrive_file"]))
+            self.assertEqual(doc.paragraphs[1].text.strip(), "المادة: العقيدة الواسطية")
+            ai_out = res["project_file"].read_text(encoding="utf-8")
+            self.assertIn("(كلام فيه عامية_مخصصة جدا)", ai_out)
+            self.assertNotIn("**(كلام فيه عامية_مخصصة جدا)**", ai_out)
+            self.assertNotIn("<!-- fallback -->", extract_text(res["onedrive_file"]))
 
 
 class TestLoadDialectMarkers(unittest.TestCase):
     def test_load_from_default_dialect_rules_ssot(self):
-        """Verify load_dialect_markers loads the 7 colloquial markers from dialect-rules.md SSOT."""
-        markers = load_dialect_markers()
+        """Verify RuleCatalog loads the 7 colloquial markers from dialect-rules.md SSOT."""
+        catalog = RuleCatalog.load()
         seven_markers = {"بتوع", "الفلوس", "اتسرق", "اتسرقت", "اتكسر", "اتعمل", "هشتري"}
         for marker in seven_markers:
-            self.assertIn(marker, markers)
-            self.assertIn(marker, DIALECT_MARKERS)
-        self.assertIn("ملوش", markers)
-        self.assertIn("ملوش", DIALECT_MARKERS)
+            self.assertIn(marker, catalog.dialect_markers)
+        self.assertIn("ملوش", catalog.dialect_markers)
 
     def test_load_dialect_markers_custom_path(self):
         """Verify custom markdown dialect rules can be loaded dynamically."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             custom_rules = Path(tmp_dir) / "dialect-rules.md"
             custom_rules.write_text(
+                "## Attendee Anonymization (فلان)\n"
+                "- **Preserved Titles & Kunyas**: أخوكم فلان، أبو فلان، الشيخ فلان.\n"
+                "- **Preserved Non-Attendee Names**: (زيد).\n"
                 "## Colloquial Lexicon & Verbal Markers\n\n"
                 "- **علامة_جديدة**، **لفظ_عامي**\n",
                 encoding="utf-8",
             )
-            markers = load_dialect_markers(custom_rules)
-            self.assertIn("علامة_جديدة", markers)
-            self.assertIn("لفظ_عامي", markers)
+            catalog = RuleCatalog.load(dialect_rules_path=custom_rules)
+            self.assertIn("علامة_جديدة", catalog.dialect_markers)
+            self.assertIn("لفظ_عامي", catalog.dialect_markers)
 
     def test_load_dialect_markers_fallback_missing_file(self):
-        """Verify fallback to base markers when rules file does not exist."""
-        markers = load_dialect_markers(Path("non_existent_dialect_rules.md"))
-        self.assertIn("كدا", markers)
-        self.assertIn("مش", markers)
-        self.assertIsInstance(markers, set)
+        """Verify fallback to base markers and D6 warning when rules file does not exist."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            missing_rules = Path(tmp_dir) / "non_existent_dialect_rules.md"
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                catalog = RuleCatalog.load(dialect_rules_path=missing_rules)
+            self.assertTrue(any(issubclass(w.category, UserWarning) for w in caught))
+            self.assertIn("كدا", catalog.dialect_markers)
+            self.assertIn("مش", catalog.dialect_markers)
+            self.assertIsInstance(catalog.dialect_markers, frozenset)
 
 
 

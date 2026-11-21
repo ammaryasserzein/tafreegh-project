@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 import os
 import re
@@ -20,11 +22,28 @@ def find_sentence_boundaries(text: str):
         boundaries.append(len(text))
     return boundaries
 
-def smart_chunk_text(text: str, target_words: int = 1300, min_words: int = 1000, max_words: int = 1600) -> list:
+def smart_chunk_text(
+    text: str,
+    target_words: int = 1300,
+    min_words: int | None = None,
+    max_words: int | None = None,
+) -> list:
     """
     Splits text into chunks of target_words at natural sentence boundaries.
     Guarantees no word truncation and clean sentence boundaries.
     """
+    if target_words <= 0:
+        raise ValueError(f"target_words must be positive, got {target_words}")
+
+    if min_words is None:
+        min_words = 1000 if target_words == 1300 else max(1, round(target_words * 1000 / 1300))
+    if max_words is None:
+        max_words = (
+            1600
+            if target_words == 1300
+            else max(target_words + 1, round(target_words * 1600 / 1300))
+        )
+
     text = text.strip()
     if not text:
         return []
@@ -97,7 +116,7 @@ def chunk_file(file_path: str, output_dir: str = None, target_words: int = 1300)
         sys.exit(1)
         
     content = src_path.read_text(encoding='utf-8')
-    chunks = smart_chunk_text(content, target_words=target_words)
+    chunks = smart_chunk_text(content, target_words=target_words, min_words=None, max_words=None)
     
     if output_dir is None:
         output_dir = src_path.parent / f"{src_path.stem}_مقاطع"
@@ -117,10 +136,16 @@ def chunk_file(file_path: str, output_dir: str = None, target_words: int = 1300)
         print(f"  - {f.name}: {cnt} words")
     return created_files
 
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) < 1:
+        print("Usage: py .agents/skills/tafreegh/scripts/chunk_transcript.py <input_transcript_file> [target_words]")
+        return 1
+
+    target = int(args[1]) if len(args) > 1 else 1300
+    chunk_file(args[0], target_words=target)
+    return 0
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: py scripts/chunk_transcript.py <input_transcript_file> [target_words]")
-        sys.exit(1)
-        
-    target = int(sys.argv[2]) if len(sys.argv) > 2 else 1300
-    chunk_file(sys.argv[1], target_words=target)
+    sys.exit(main())

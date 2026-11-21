@@ -1,15 +1,10 @@
 import unittest
-import sys
-from pathlib import Path
 
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from matn_matcher import (
-    SequentialMatnMatcher,
+from tafreegh.matn_matcher import (
+    COMPOUND_SHARH_SPLIT_RE,
     MatchMode,
-    strip_tashkeel,
-    normalize_arabic_search,
+    MatnCursorSnapshot,
+    SequentialMatnMatcher,
     format_matn_segment,
     generate_fallback_summary,
 )
@@ -26,11 +21,6 @@ class TestMatnMatcher(unittest.TestCase):
             "وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"
         )
         self.matcher = SequentialMatnMatcher(self.sample_source, forward_lookahead=500)
-
-    def test_strip_tashkeel(self):
-        vowelized = "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ"
-        plain = strip_tashkeel(vowelized)
-        self.assertEqual(plain, "إن مبادئ كل علم عشره")
 
     def test_forward_search_advances_cursor(self):
         res1 = self.matcher.match_segment("ان مبادئ كل علم عشره")
@@ -271,7 +261,7 @@ class TestMatnMatcher(unittest.TestCase):
             "عن ابن مسعود قال اني لارجو ان تكونوا نصف اهل الجنه وذلك ان الجنه لا يدخلها الا نفس مسلمه"
         )
         self.assertEqual(full.mode, MatchMode.PRIMARY)
-        self.assertEqual(matcher.cursor_norm, len(matcher.norm_source))
+        self.assertEqual(matcher.cursor, len(source))
 
         # 2. Sheikh re-reads clause before 'وَذَلِكَ' during commentary
         reread = matcher.match_segment("اني لارجو ان تكونوا نصف اهل الجنه")
@@ -287,6 +277,149 @@ class TestMatnMatcher(unittest.TestCase):
         """SequentialMatnMatcher is a generation pipeline engine; validation heuristics belong in verify_docx (CODING_STANDARDS § 6)."""
         self.assertFalse(hasattr(self.matcher, "verify_exported_segment"))
         self.assertFalse(hasattr(SequentialMatnMatcher, "verify_exported_segment"))
+
+    def test_encapsulates_internal_buffers_and_exposes_read_only_cursor_and_snapshot(self):
+        self.assertFalse(hasattr(self.matcher, "norm_source"))
+        self.assertFalse(hasattr(self.matcher, "pos_map"))
+
+        snap_init = self.matcher.snapshot()
+        self.assertEqual(snap_init, MatnCursorSnapshot(cursor=0, cursor_norm=0, history_length=0))
+
+        with self.assertRaises(AttributeError):
+            self.matcher.cursor = 10  # type: ignore[misc]
+        with self.assertRaises(AttributeError):
+            self.matcher.cursor_norm = 10  # type: ignore[misc]
+
+        res = self.matcher.match_segment("ان مبادئ كل علم عشره")
+        snap_after = self.matcher.snapshot()
+        self.assertEqual(snap_after.cursor, self.matcher.cursor)
+        self.assertEqual(snap_after.cursor_norm, self.matcher.cursor_norm)
+        self.assertEqual(snap_after.history_length, 1)
+        self.assertGreater(res.end_pos, res.start_pos)
+
+    def test_contains_and_advance_to_canonical_occurrence_domain_methods(self):
+        filler = " ".join(["كَلِمَةٌ"] * 250)
+        long_source = f"إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ {filler} وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"
+        matcher = SequentialMatnMatcher(long_source, forward_lookahead=50)
+        matcher.match_segment("ان مبادئ كل علم عشره")
+        cursor_before = matcher.cursor
+
+        self.assertTrue(matcher.contains_verbatim("وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"))
+        self.assertFalse(matcher.contains_verbatim("ومن درى الجميع حاز الشرفا"))
+        self.assertTrue(matcher.contains_normalized("ومن درى الجميع حاز الشرفا"))
+        self.assertFalse(matcher.contains_normalized("نص غير موجود اطلاقا"))
+
+        self.assertFalse(matcher.advance_to_canonical_occurrence("ومن درى الجميع حاز الشرفا"))
+        self.assertEqual(matcher.cursor, cursor_before)
+
+        self.assertTrue(matcher.advance_to_canonical_occurrence("وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"))
+        self.assertGreater(matcher.cursor, cursor_before)
+        self.assertEqual(matcher.cursor, len(long_source))
+        # Already at end: subsequent call returns False because cursor does not advance
+        self.assertFalse(matcher.advance_to_canonical_occurrence("وَمَنْ دَرَى الجَمِيعَ حَازَ الشَّرَفَا"))
+
+    def test_advance_to_canonical_occurrence_skips_non_verbatim_normalized_matches_ahead(self):
+        # First occurrence is canonical (behind cursor after first match),
+        # second occurrence differs in diacritics, third occurrence is canonical.
+        phrase = "قَالَ الْمُصَنِّفُ"
+        variant = "قَالَ المصنف"
+        filler = " ".join(["كَلِمَةٌ"] * 200)
+        source = f"{phrase} {filler} {variant} {filler} {phrase}"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=50)
+        matcher.match_segment("قال المصنف")
+        cursor_after_first = matcher.cursor
+
+        self.assertTrue(matcher.advance_to_canonical_occurrence(phrase))
+        self.assertEqual(matcher.cursor, len(source))
+        self.assertGreater(matcher.cursor, cursor_after_first)
+
+        # If only a non-verbatim normalized variant lies ahead, cursor must stay put and return False
+        source_variant_ahead = f"{phrase} {filler} {variant}"
+        matcher_var = SequentialMatnMatcher(source_variant_ahead, forward_lookahead=50)
+        matcher_var.match_segment("قال المصنف")
+        cursor_var_before = matcher_var.cursor
+        self.assertFalse(matcher_var.advance_to_canonical_occurrence(phrase))
+        self.assertEqual(matcher_var.cursor, cursor_var_before)
+
+    def test_match_segment_preserves_closing_delimiters_at_span_end(self):
+        source = (
+            'قَالَ تَعَالَى: (وَلَا تَقُولَنَّ لِشَيْءٍ) ثُمَّ قَالَ: "إِنَّمَا الْأَعْمَالُ بِالنِّيَّاتِ" '
+            "وَذَكَرَ: «مَسْأَلَةً نَافِعَةً»."
+        )
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+
+        res_paren = matcher.match_segment("قال تعالى ولا تقولن لشيء")
+        self.assertEqual(res_paren.mode, MatchMode.PRIMARY)
+        self.assertEqual(res_paren.text, "قَالَ تَعَالَى: (وَلَا تَقُولَنَّ لِشَيْءٍ)")
+        self.assertEqual(source[res_paren.start_pos : res_paren.end_pos], res_paren.text)
+
+        res_quote = matcher.match_segment("ثم قال انما الاعمال بالنيات")
+        self.assertEqual(res_quote.mode, MatchMode.PRIMARY)
+        self.assertEqual(res_quote.text, 'ثُمَّ قَالَ: "إِنَّمَا الْأَعْمَالُ بِالنِّيَّاتِ"')
+
+        res_guillemet = matcher.match_segment("وذكر مسألة نافعة")
+        self.assertEqual(res_guillemet.mode, MatchMode.PRIMARY)
+        self.assertEqual(res_guillemet.text, "وَذَكَرَ: «مَسْأَلَةً نَافِعَةً»")
+
+    def test_multiline_matn_source_collapses_internal_newlines_in_result_and_format(self):
+        source = "إِنَّ مَبَادِئَ\n\nكُلِّ عِلْمٍ عَشَرَهْ\r\n\r\nالحَدُّ وَالمَوْضُوعُ"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+
+        res1 = matcher.match_segment("ان مبادئ كل علم عشره")
+        self.assertEqual(res1.mode, MatchMode.PRIMARY)
+        self.assertNotIn("\n", res1.text)
+        self.assertNotIn("\r", res1.text)
+        self.assertEqual(res1.text, "إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ")
+        self.assertEqual(format_matn_segment(res1), "**(إِنَّ مَبَادِئَ كُلِّ عِلْمٍ عَشَرَهْ)**")
+
+    def test_match_segment_skips_editorial_digit_brackets_and_retains_them_in_primary_output(self):
+        source = "قَالَ {بَدِيعُ} [البقرة: 117] وَقَالَ: [1] خُلِقَ"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+        res = matcher.match_segment("قال بديع وقال خلق")
+        self.assertEqual(res.mode, MatchMode.PRIMARY)
+        self.assertEqual(res.text, "قَالَ {بَدِيعُ} [البقرة: 117] وَقَالَ: [1] خُلِقَ")
+
+    def test_contains_verbatim_normalizes_nfc_combining_order(self):
+        source = "إِنَّ \u0627\u0644\u0644\u0651\u064e\u0647\u064e غَفُورٌ ... \u0631\u064e\u0628\u0651\u064e\u0646\u064e\u0627"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=50)
+        word_ordered = "إِنَّ \u0627\u0644\u0644\u064e\u0651\u0647\u064e غَفُورٌ"
+        self.assertTrue(matcher.contains_verbatim(word_ordered))
+        self.assertTrue(matcher.advance_to_canonical_occurrence("\u0631\u064e\u0628\u064e\u0651\u0646\u064e\u0627"))
+
+    def test_match_segment_retains_trailing_punctuation_when_query_explicitly_punctuated(self):
+        source = "مِنْ آدَابِ الْعِلْمِ بِالاِسْمِ وَآثَارِهِ: النَّظَرُ فِي مُبْدَعَاتِهِ!"
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+
+        res_colon = matcher.match_segment("من اداب العلم بالاسم واثاره:")
+        self.assertEqual(res_colon.mode, MatchMode.PRIMARY)
+        self.assertEqual(res_colon.text, "مِنْ آدَابِ الْعِلْمِ بِالاِسْمِ وَآثَارِهِ:")
+        self.assertEqual(source[res_colon.start_pos : res_colon.end_pos], res_colon.text)
+
+        res_plain = matcher.match_segment("النظر في مبدعاته")
+        self.assertEqual(res_plain.mode, MatchMode.PRIMARY)
+        self.assertEqual(res_plain.text, "النَّظَرُ فِي مُبْدَعَاتِهِ")
+
+    def test_expanded_compound_sharh_lead_ins_anchor_to_primary_tail(self):
+        source = (
+            "أَأَنْثُرُ دُرًّا بَيْنَ سَارِحَةِ الْبَهْمِ ... "
+            "وَهَذِهِ هِيَ قَاعِدَةُ الْمَذْهَبِ ... "
+            "كَمَا بَيَّنَ ذَلِكَ الشَّارِحُ"
+        )
+        matcher = SequentialMatnMatcher(source, forward_lookahead=500)
+
+        r1 = matcher.match_segment("ثم أنشد قائلًا: أأنثر درا بين سارحة البهم")
+        self.assertTrue(r1.is_source_anchored)
+        self.assertEqual(r1.text, "ثم أنشد قائلا: أَأَنْثُرُ دُرًّا بَيْنَ سَارِحَةِ الْبَهْمِ")
+
+        r2 = matcher.match_segment("قال الشيخ العثيمين: وهذه هي قاعدة المذهب")
+        self.assertTrue(r2.is_source_anchored)
+        self.assertEqual(r2.text, "قال الشيخ العثيمين: وَهَذِهِ هِيَ قَاعِدَةُ الْمَذْهَبِ")
+
+        r3 = matcher.match_segment("لقوله تعالى: كما بين ذلك الشارح")
+        self.assertTrue(r3.is_source_anchored)
+        self.assertEqual(r3.text, "لقوله تعالى: كَمَا بَيَّنَ ذَلِكَ الشَّارِحُ")
+
+        self.assertIsNotNone(COMPOUND_SHARH_SPLIT_RE.match("ثم أنشد قائلًا: أَأَنْثُرُ"))
 
 
 if __name__ == "__main__":

@@ -1,13 +1,8 @@
 import unittest
-import sys
-from pathlib import Path
 
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from diff_inline_matn import (
-    classify_matn_diffs,
+from tafreegh.diff_inline_matn import (
     MatnDiffCategory,
+    classify_matn_diffs,
     format_matn_diff_report,
 )
 
@@ -153,6 +148,64 @@ class TestDiffInlineMatn(unittest.TestCase):
         expiry_diffs = [d for d in diffs if d.category == MatnDiffCategory.ANCHOR_EXPIRY_REREAD]
         self.assertEqual(len(fb_diffs), 1)
         self.assertEqual(len(expiry_diffs), 1)
+
+    def test_compound_fallback_prefix_wrapping_primary_matn_is_fallback_correction(self):
+        ai_text = "ثم قال الشاعر: **(أَأَنْثُرُ دُرًّا)**"
+        user_text = "**(حدثنا أبو علي قال: أَأَنْثُرُ دُرًّا)**"
+        matn_source = "أَأَنْثُرُ دُرًّا بَيْنَ سَارِحَةِ الْبَهْمِ"
+
+        diffs = classify_matn_diffs(ai_text, user_text, matn_source=matn_source)
+        fb_diffs = [d for d in diffs if d.category == MatnDiffCategory.FALLBACK_CORRECTION]
+        copy_errors = [d for d in diffs if d.category == MatnDiffCategory.MATN_COPY_ERROR]
+
+        self.assertEqual(copy_errors, [])
+        self.assertEqual(len(fb_diffs), 1)
+        self.assertEqual(fb_diffs[0].ai_text, "أَأَنْثُرُ دُرًّا")
+        self.assertEqual(fb_diffs[0].user_text, "حدثنا أبو علي قال: أَأَنْثُرُ دُرًّا")
+
+    def test_compound_fallback_suffix_absent_from_source_is_fallback_correction(self):
+        ai_text = "**(أَأَنْثُرُ دُرًّا)**"
+        user_text = "**(أَأَنْثُرُ دُرًّا أي هذا مثل مشهور)**"
+        matn_source = "أَأَنْثُرُ دُرًّا بَيْنَ سَارِحَةِ الْبَهْمِ"
+
+        diffs = classify_matn_diffs(ai_text, user_text, matn_source=matn_source)
+        self.assertEqual(len(diffs), 1)
+        self.assertEqual(diffs[0].category, MatnDiffCategory.FALLBACK_CORRECTION)
+        self.assertEqual(diffs[0].ai_text, "أَأَنْثُرُ دُرًّا")
+
+    def test_single_word_variant_links_to_ai_text_as_matn_copy_error(self):
+        ai_text = "**(وَقَدْ بَسَطَتْ لَنَا الدُّنْيَا ذِرَاعَيْهَا)**"
+        user_text = "**(وَقَدْ انْبَسَطَتْ لَنَا الدُّنْيَا ذِرَاعَيْهَا)**"
+        matn_source = "وَقَدْ بَسَطَتْ لَنَا الدُّنْيَا ذِرَاعَيْهَا"
+
+        diffs = classify_matn_diffs(ai_text, user_text, matn_source=matn_source)
+        oral_diffs = [d for d in diffs if d.category == MatnDiffCategory.ORAL_CITATION]
+        copy_errors = [d for d in diffs if d.category == MatnDiffCategory.MATN_COPY_ERROR]
+
+        self.assertEqual(oral_diffs, [])
+        self.assertEqual(len(copy_errors), 1)
+        self.assertEqual(copy_errors[0].ai_text, "وَقَدْ بَسَطَتْ لَنَا الدُّنْيَا ذِرَاعَيْهَا")
+        self.assertEqual(copy_errors[0].user_text, "وَقَدْ انْبَسَطَتْ لَنَا الدُّنْيَا ذِرَاعَيْهَا")
+
+    def test_short_single_word_variant_links_to_ai_text_as_matn_copy_error(self):
+        ai_text = "**(وَلَمَّا بَسَطَتْ يَدَهَا)**"
+        user_text = "**(وَلَمَّا انْبَسَطَتْ يَدَهَا)**"
+        matn_source = "وَلَمَّا بَسَطَتْ يَدَهَا"
+
+        diffs = classify_matn_diffs(ai_text, user_text, matn_source=matn_source)
+        self.assertEqual(len(diffs), 1)
+        self.assertEqual(diffs[0].category, MatnDiffCategory.MATN_COPY_ERROR)
+        self.assertEqual(diffs[0].ai_text, "وَلَمَّا بَسَطَتْ يَدَهَا")
+
+    def test_unrelated_oral_citation_with_incidental_common_words_stays_oral_citation(self):
+        ai_text = "**(في الله)**"
+        user_text = "**(مَنْ كَانَ فِي حَاجَةِ أَخِيهِ كَانَ اللَّهُ فِي حَاجَتِهِ)**"
+        matn_source = "متن مختلف تماما"
+
+        diffs = classify_matn_diffs(ai_text, user_text, matn_source=matn_source)
+        oral_diffs = [d for d in diffs if d.category == MatnDiffCategory.ORAL_CITATION]
+        self.assertEqual(len(oral_diffs), 1)
+        self.assertIsNone(oral_diffs[0].ai_text)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ Repository Verification Guardrail
 Validates:
 1. Root-level scratch containment (.scratch/ or $env:TEMP)
 2. Standard directory structure integrity
-3. Context and standards path integrity and table syntax
+3. Course routing reference and standards path integrity and table syntax
 4. Elimination of negative phrasing in steering documentation
 5. Coding standards existence and structural completeness
 """
@@ -35,11 +35,9 @@ FORBIDDEN_ROOT_PATTERNS = [
 
 ALLOWED_ROOT_FILES = {
     # Steering & Documentation
-    "README.md",
+    "AGENTS.md",
     "CODING_STANDARDS.md",
-    "CONTEXT.md",
     "GLOSSARY.md",
-    "handoff.md",
     # Assets & Templates
     "Word base.docx",
     # Tooling & Config
@@ -52,17 +50,38 @@ ALLOWED_ROOT_FILES = {
     "pytest.ini",
 }
 
+ALLOWED_ROOT_DIRS = {
+    *STANDARD_DIRS,
+    # Repository & Skill Tooling / Junctions
+    "scripts",
+    "tests",
+    "docs",
+    "tafreegh-skill",
+    "node_modules",
+    # Designated Scratch & Hidden Tooling
+    ".git",
+    ".agents",
+    ".scratch",
+    ".husky",
+    ".pytest_cache",
+    ".obsidian",
+    ".vscode",
+}
+
+
+COURSE_ROUTING_DOC = ".agents/skills/tafreegh/references/course-routing.md"
 
 STEERING_DOCS = [
-    "CONTEXT.md",
     "CODING_STANDARDS.md",
     ".agents/skills/tafreegh/SKILL.md",
+    COURSE_ROUTING_DOC,
     ".agents/skills/tafreegh/references/formatting-rules.md",
     ".agents/skills/tafreegh/references/dialect-rules.md",
 ]
 
 SKILL_DOCS = [
     ".agents/skills/tafreegh/SKILL.md",
+    COURSE_ROUTING_DOC,
     ".agents/skills/tafreegh/references/formatting-rules.md",
     ".agents/skills/tafreegh/references/dialect-rules.md",
 ]
@@ -78,6 +97,7 @@ NEGATIVE_PHRASING_PATTERNS = [
 
 INLINE_BACKTICK_PATTERN = re.compile(r"`([^`\n]+)`")
 ARABIC_CHAR_PATTERN = re.compile(r"[\u0600-\u06FF]")
+HARDCODED_PATH_PATTERN = re.compile(r"(?:[A-Za-z]:[/\\]|Tafreegh_Project\b)", re.IGNORECASE)
 
 REQUIRED_STANDARDS_SECTIONS = [
     "Scope & Blast Radius",
@@ -89,7 +109,8 @@ class FindingCategory(str, Enum):
     SCRATCH = "SCRATCH"
     PHRASING = "PHRASING"
     BACKTICK = "BACKTICK"
-    CONTEXT = "CONTEXT"
+    PATH = "PATH"
+    ROUTING = "ROUTING"
     TABLE = "TABLE"
     STANDARDS = "STANDARDS"
 
@@ -114,7 +135,7 @@ VALID_SUBDIRECTORIES = {
     "01_Matn_Sources": {"processed"},
     "02_Raw_Inputs": {"processed"},
     "03_AI_Outputs": set(),
-    "04_Training_Data": set(),
+    "04_Training_Data": {"delivered_matched"},
 }
 
 def check_directories(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
@@ -134,15 +155,34 @@ def check_directories(findings: list[Finding], base_dir: Path = REPO_ROOT) -> No
                         file_path=str(child.relative_to(base_dir))
                     ))
 
+def _is_git_worktree_pointer(candidate: Path) -> bool:
+    if candidate.name != ".git":
+        return False
+    try:
+        lines = candidate.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False
+    if len(lines) != 1:
+        return False
+    return lines[0].startswith("gitdir:") and bool(lines[0][len("gitdir:"):].strip())
+
+
 def check_no_root_scratch(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
-    for candidate_file in base_dir.iterdir():
-        if candidate_file.is_file():
-            if candidate_file.name not in ALLOWED_ROOT_FILES:
-                findings.append(Finding(
-                    category=FindingCategory.SCRATCH,
-                    message=f"Root-level scratch file found: {candidate_file.name}. Move to .scratch/ or $env:TEMP",
-                    file_path=candidate_file.name
-                ))
+    for candidate in base_dir.iterdir():
+        if candidate.is_dir() or candidate.is_junction():
+            kind, is_allowed = "directory", candidate.name in ALLOWED_ROOT_DIRS
+        elif candidate.is_file():
+            kind = "file"
+            is_allowed = _is_git_worktree_pointer(candidate) or candidate.name in ALLOWED_ROOT_FILES
+        else:
+            continue
+
+        if not is_allowed:
+            findings.append(Finding(
+                category=FindingCategory.SCRATCH,
+                message=f"Root-level scratch {kind} found: {candidate.name}. Move to .scratch/ or $env:TEMP",
+                file_path=candidate.name
+            ))
 
 def check_scratch_cleanliness(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     check_no_root_scratch(findings, base_dir=base_dir)
@@ -181,28 +221,59 @@ def check_no_arabic_in_backticks(findings: list[Finding], base_dir: Path = REPO_
                         line_number=line_number
                     ))
 
-def check_context_integrity(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
-    context_file = base_dir / "CONTEXT.md"
-    if not context_file.is_file():
-        findings.append(Finding(category=FindingCategory.CONTEXT, message="Missing CONTEXT.md in repository root."))
+
+def check_no_hardcoded_skill_paths(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
+    for doc_name in SKILL_DOCS:
+        target_doc = base_dir / doc_name
+        if not target_doc.is_file():
+            continue
+        lines = target_doc.read_text(encoding="utf-8").splitlines()
+        for line_number, line_content in enumerate(lines, 1):
+            if HARDCODED_PATH_PATTERN.search(line_content):
+                findings.append(Finding(
+                    category=FindingCategory.PATH,
+                    message=f"Hardcoded absolute or production worktree path in skill doc: {line_content.strip()[:80]}",
+                    file_path=doc_name,
+                    line_number=line_number
+                ))
+
+def check_course_routing_integrity(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
+    routing_file = base_dir / COURSE_ROUTING_DOC
+    if not routing_file.is_file():
+        findings.append(
+            Finding(
+                category=FindingCategory.ROUTING,
+                message=f"Missing course routing reference: {COURSE_ROUTING_DOC}",
+                file_path=COURSE_ROUTING_DOC,
+            )
+        )
         return
 
-    content = context_file.read_text(encoding="utf-8")
+    content = routing_file.read_text(encoding="utf-8")
 
-    # Match directory references with or without backticks or trailing slashes
-    for match in re.finditer(r"\b([0-9]{2}_[A-Za-z_]+)\b", content):
-        dir_reference = match.group(1)
-        if dir_reference not in STANDARD_DIRS:
-            findings.append(Finding(
-                category=FindingCategory.CONTEXT,
-                message=f"Invalid folder reference in CONTEXT.md: `{dir_reference}`",
-                file_path="CONTEXT.md"
-            ))
+    # Validate standard folder references across course-routing.md and SKILL.md (when present)
+    folder_check_docs: list[tuple[str, str]] = [(COURSE_ROUTING_DOC, content)]
+    skill_file = base_dir / ".agents/skills/tafreegh/SKILL.md"
+    if skill_file.is_file():
+        folder_check_docs.append((".agents/skills/tafreegh/SKILL.md", skill_file.read_text(encoding="utf-8")))
 
-    # Validate table syntax with escaped pipe support
+    for doc_rel, doc_text in folder_check_docs:
+        for match in re.finditer(r"\b([0-9]{2}_[A-Za-z_]+)\b", doc_text):
+            dir_reference = match.group(1)
+            if dir_reference not in STANDARD_DIRS:
+                findings.append(
+                    Finding(
+                        category=FindingCategory.ROUTING,
+                        message=f"Invalid folder reference in {doc_rel}: `{dir_reference}`",
+                        file_path=doc_rel,
+                    )
+                )
+
+    # Validate 3-column routing table syntax with escaped pipe support
     lines = content.splitlines()
     in_table = False
     expected_column_count = 0
+    data_row_count = 0
     for line_number, line_content in enumerate(lines, 1):
         stripped_line = line_content.strip()
         if stripped_line.startswith("|") and stripped_line.endswith("|"):
@@ -211,16 +282,48 @@ def check_context_integrity(findings: list[Finding], base_dir: Path = REPO_ROOT)
             if not in_table:
                 in_table = True
                 expected_column_count = len(cells)
+                if expected_column_count != 3:
+                    findings.append(
+                        Finding(
+                            category=FindingCategory.TABLE,
+                            message=f"Course routing table must have 3 columns (keywords, canonical subject, source text), got {expected_column_count}",
+                            file_path=COURSE_ROUTING_DOC,
+                            line_number=line_number,
+                        )
+                    )
             else:
                 if len(cells) != expected_column_count:
-                    findings.append(Finding(
-                        category=FindingCategory.TABLE,
-                        message=f"Table column count mismatch: expected {expected_column_count}, got {len(cells)}",
-                        file_path="CONTEXT.md",
-                        line_number=line_number
-                    ))
+                    findings.append(
+                        Finding(
+                            category=FindingCategory.TABLE,
+                            message=f"Table column count mismatch: expected {expected_column_count}, got {len(cells)}",
+                            file_path=COURSE_ROUTING_DOC,
+                            line_number=line_number,
+                        )
+                    )
+                elif not all(re.match(r"^:?-+:?$", cell) for cell in cells):
+                    data_row_count += 1
+                    if any(not cell for cell in cells):
+                        findings.append(
+                            Finding(
+                                category=FindingCategory.TABLE,
+                                message="Course routing table row contains an empty cell",
+                                file_path=COURSE_ROUTING_DOC,
+                                line_number=line_number,
+                            )
+                        )
         else:
             in_table = False
+
+    if data_row_count == 0:
+        findings.append(
+            Finding(
+                category=FindingCategory.ROUTING,
+                message=f"No course routing table rows found in {COURSE_ROUTING_DOC}",
+                file_path=COURSE_ROUTING_DOC,
+            )
+        )
+
 
 def check_coding_standards(findings: list[Finding], base_dir: Path = REPO_ROOT) -> None:
     standards_file = base_dir / "CODING_STANDARDS.md"
@@ -243,7 +346,8 @@ def run_all_checks(base_dir: Path = REPO_ROOT) -> list[Finding]:
     check_no_root_scratch(findings, base_dir=base_dir)
     check_steering_docs_phrasing(findings, base_dir=base_dir)
     check_no_arabic_in_backticks(findings, base_dir=base_dir)
-    check_context_integrity(findings, base_dir=base_dir)
+    check_no_hardcoded_skill_paths(findings, base_dir=base_dir)
+    check_course_routing_integrity(findings, base_dir=base_dir)
     check_coding_standards(findings, base_dir=base_dir)
     return findings
 

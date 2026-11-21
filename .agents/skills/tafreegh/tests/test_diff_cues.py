@@ -1,20 +1,32 @@
 """Tests for diff_cues module — detecting new student cue candidates from Diff Loop."""
 
-import sys
-from pathlib import Path
+import pytest
 
-scripts_dir = Path(__file__).parent.parent / "scripts"
-sys.path.insert(0, str(scripts_dir))
-
-from diff_cues import detect_new_student_cues
+from tafreegh.diff_cues import CueResult, detect_new_student_cues, format_cue_report
 
 
 class TestDetectNewStudentCues:
-    """Seam: detect_new_student_cues(ai_text, corrected_text) -> list[CueCandidate]"""
+    """Seam: detect_new_student_cues(ai_text, corrected_text) -> CueResult"""
+
+    def test_cue_result_exposes_domain_collections_without_list_emulation(self):
+        result = CueResult()
+        assert result.inserted == []
+        assert result.removed == []
+        assert result != []
+        for magic in ("__len__", "__getitem__", "__iter__"):
+            assert not hasattr(CueResult, magic)
+        with pytest.raises(TypeError):
+            len(result)  # type: ignore[arg-type]
+        with pytest.raises(TypeError):
+            _ = result[0]  # type: ignore[index]
+        with pytest.raises(TypeError):
+            iter(result)  # type: ignore[arg-type]
 
     def test_no_differences_returns_empty(self):
         text = "الحمد لله رب العالمين.\n\nطيب نبدأ الدرس."
-        assert detect_new_student_cues(text, text) == []
+        result = detect_new_student_cues(text, text)
+        assert result.inserted == []
+        assert result.removed == []
 
     def test_detects_new_inaudible_student_line(self):
         ai_text = "هل عندك سؤال يا فلان؟ نعم؟ طيب نكمل الدرس."
@@ -24,8 +36,8 @@ class TestDetectNewStudentCues:
             "طيب نكمل الدرس."
         )
         result = detect_new_student_cues(ai_text, corrected_text)
-        assert len(result) == 1
-        assert "نعم؟" in result[0]["cue_sentence"]
+        assert len(result.inserted) == 1
+        assert "نعم؟" in result.inserted[0]["cue_sentence"]
 
     def test_ignores_student_lines_present_in_both(self):
         shared = (
@@ -33,7 +45,9 @@ class TestDetectNewStudentCues:
             "طالب: صوت غير مسموع.\n\n"
             "طيب نكمل."
         )
-        assert detect_new_student_cues(shared, shared) == []
+        result = detect_new_student_cues(shared, shared)
+        assert result.inserted == []
+        assert result.removed == []
 
     def test_detects_multiple_new_cues(self):
         ai_text = "أول نقطة، نعم؟ ثاني نقطة، بتقول حاجة؟ ثالث نقطة."
@@ -45,7 +59,7 @@ class TestDetectNewStudentCues:
             "ثالث نقطة."
         )
         result = detect_new_student_cues(ai_text, corrected_text)
-        assert len(result) == 2
+        assert len(result.inserted) == 2
 
     def test_extracts_preceding_sentence_as_cue(self):
         ai_text = "هذه المسألة مهمة جداً، واضح كدا؟ نمشي للنقطة التالية."
@@ -55,8 +69,8 @@ class TestDetectNewStudentCues:
             "نمشي للنقطة التالية."
         )
         result = detect_new_student_cues(ai_text, corrected_text)
-        assert len(result) == 1
-        assert "واضح كدا؟" in result[0]["cue_sentence"]
+        assert len(result.inserted) == 1
+        assert "واضح كدا؟" in result.inserted[0]["cue_sentence"]
 
     def test_ignores_audible_student_lines(self):
         """Only 'صوت غير مسموع' triggers cue detection, not regular student speech."""
@@ -65,7 +79,9 @@ class TestDetectNewStudentCues:
             "الشيخ يتكلم عن المسألة.\n\n"
             "طالب: جزاك الله خيراً.\n\n"
         )
-        assert detect_new_student_cues(ai_text, corrected_text) == []
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert result.inserted == []
+        assert result.removed == []
 
     def test_returns_line_number_in_corrected_text(self):
         corrected_text = (
@@ -76,9 +92,9 @@ class TestDetectNewStudentCues:
         )
         ai_text = "سطر أول.\n\nسطر ثاني، نعم؟ سطر رابع."
         result = detect_new_student_cues(ai_text, corrected_text)
-        assert len(result) == 1
-        assert "line_number" in result[0]
-        assert result[0]["line_number"] > 0
+        assert len(result.inserted) == 1
+        assert "line_number" in result.inserted[0]
+        assert result.inserted[0]["line_number"] > 0
 
     def test_handles_partial_inaudible_not_as_cue(self):
         """Partial inaudible (with parentheses) should NOT trigger cue detection —
@@ -88,7 +104,9 @@ class TestDetectNewStudentCues:
             "الشيخ يتكلم.\n\n"
             "طالب: كلمة (صوت غير مسموع).\n\n"
         )
-        assert detect_new_student_cues(ai_text, corrected_text) == []
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert result.inserted == []
+        assert result.removed == []
 
     def test_suppresses_rhetorical_ha_suffix(self):
         """Cue sentences ending in 'ها؟' are rhetorical — suppressed by suffix filter."""
@@ -98,7 +116,8 @@ class TestDetectNewStudentCues:
             "طالب: صوت غير مسموع.\n\n"
             "نكمل الدرس."
         )
-        assert detect_new_student_cues(ai_text, corrected_text) == []
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert result.inserted == []
 
     def test_suppresses_rhetorical_eih_suffix(self):
         """Cue sentences ending in 'إيه؟' are rhetorical — suppressed by suffix filter."""
@@ -108,4 +127,95 @@ class TestDetectNewStudentCues:
             "طالب: صوت غير مسموع.\n\n"
             "نكمل الدرس."
         )
-        assert detect_new_student_cues(ai_text, corrected_text) == []
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert result.inserted == []
+
+    def test_detects_removed_cues_and_formats_both_sections(self):
+        ai_text = (
+            "نقطة أولى، مش كدا؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "شرح مستمر في المسألة.\n\n"
+            "تفصيل ثانٍ واضح.\n\n"
+            "نقطة ثانية، نعم؟\n\n"
+            "نقطة ثالثة."
+        )
+        corrected_text = (
+            "نقطة أولى، مش كدا؟\n\n"
+            "شرح مستمر في المسألة.\n\n"
+            "تفصيل ثانٍ واضح.\n\n"
+            "نقطة ثانية، نعم؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "نقطة ثالثة."
+        )
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert len(result.inserted) == 1
+        assert len(result.removed) == 1
+        assert "نعم؟" in result.inserted[0]["cue_sentence"]
+        assert "مش كدا؟" in result.removed[0]["cue_sentence"]
+
+        report = format_cue_report(result)
+        assert "مرشحات تنبيهات محادثة جديدة" in report
+        assert "تنبيهات محذوفة من قبل المستخدم" in report
+
+    def test_suppresses_inaudible_replacing_existing_ai_student_turn(self):
+        ai_text = (
+            "هذا الكلام واضح؟\n\n"
+            "طالب: أي حاجة.\n\n"
+            "نكمل الدرس."
+        )
+        corrected_text = (
+            "هذا الكلام واضح؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "نكمل الدرس."
+        )
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert result.inserted == []
+        assert result.removed == []
+
+    def test_suppresses_echoed_turn_replaced_by_inaudible_in_wider_hunk(self):
+        ai_text = (
+            "ولما يعجز.\n\n"
+            "طالب: هيسرقك.\n\n"
+            "هيحسدك وهيسرقك."
+        )
+        corrected_text = (
+            "ولما يعجز.\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "هيسرقك، هيحسدك وهيسرقك."
+        )
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert result.inserted == []
+
+    def test_aligns_replaced_and_brand_new_turns_within_same_replace_hunk(self):
+        ai_text = (
+            "سؤال أول؟ تكملة أولى.\n\n"
+            "طالب: كلام غلط.\n\n"
+            "نهاية الدرس."
+        )
+        corrected_text = (
+            "سؤال أول؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "تكملة أولى.\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "نهاية الدرس."
+        )
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert len(result.inserted) == 1
+        assert result.inserted[0]["cue_sentence"] == "سؤال أول؟"
+
+    def test_merged_echoed_turn_does_not_mask_later_brand_new_inaudible_in_same_hunk(self):
+        ai_text = (
+            "السؤال الأول؟\n\n"
+            "طالب: كلام الشيخ.\n\n"
+            "السؤال الثاني؟ باقي الكلام."
+        )
+        corrected_text = (
+            "السؤال الأول؟ كلام الشيخ.\n\n"
+            "السؤال الثاني؟\n\n"
+            "طالب: صوت غير مسموع.\n\n"
+            "باقي الكلام."
+        )
+        result = detect_new_student_cues(ai_text, corrected_text)
+        assert len(result.inserted) == 1
+        assert result.inserted[0]["cue_sentence"] == "السؤال الثاني؟"
+

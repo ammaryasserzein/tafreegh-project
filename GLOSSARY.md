@@ -5,55 +5,55 @@ Scholarly transcription and canonical-alignment pipeline for Arabic Islamic lect
 ## Language
 
 **The Curriculum** (الدوري):
-The 12-course Islamic lecture series delivered by Sheikh Osama, where each course maps to a dedicated canonical text and delivery destination.
-_Avoid_: The program, lecture series, subject list
+The recurring Islamic lecture series delivered by Sheikh Osama, where each course corresponds to a dedicated canonical text and delivery destination.
+_Avoid_: The program, lecture series, subject list, Al-Dawri
 
 **Blind Literalism**:
 The core transcription principle: copy matn text exactly as it appears in the canonical source, preserving every diacritic, orthographic mark, and footnote marker without alteration — even if the speaker mispronounces a word.
 _Avoid_: Faithful copying, exact transcription
 
 **Matn Source**:
-A per-lecture Markdown file containing the exact vowelized canonical text the sheikh reads from, extracted from the relevant pages of the source book.
+The per-lecture vowelized canonical text the Sheikh reads from, extracted verbatim from the relevant pages of the source book.
 _Avoid_: Reference text, source file, book file
 
 **Primary Mode**:
-Matn matching mode that uses a Matn Source file as absolute authority. Identified passages are replaced with the source's exact text including full tashkeel.
+Matn matching mode that treats the Matn Source as absolute authority, replacing identified spoken readings with the canonical text and its full tashkeel.
 _Avoid_: Standard Mode, Branch A, normal mode
 
 **Fallback Mode**:
-Matn matching mode used when no Matn Source is available. Reading boundaries are detected via linguistic cues (fusha vs colloquial shift). Matn is transcribed without tashkeel.
+Matn matching mode used when no Matn Source is available. Reading boundaries are detected via linguistic cues (fusha vs colloquial shift), and Matn is transcribed without tashkeel.
 _Avoid_: Single-input mode, Branch B, no-matn mode
 
 **Dynamic Fallback Interleaving**:
-Hybrid matching strategy for incomplete matn source files. The system uses Primary Mode for segments found in the source and automatically switches to Fallback Mode for segments the sheikh reads that are absent from the file.
+Hybrid matching strategy for an incomplete Matn Source, applying Primary Mode to passages present in the source and switching to Fallback Mode for spoken book passages absent from it.
 _Avoid_: Hybrid Mode, mixed mode, partial matching
 
 **Fallback Correction**:
-A diff-loop classification for user edits to segments that were processed in Fallback Mode. Distinguished from matn copy errors to preserve training signal fidelity.
+A Diff Loop classification for reviewer edits to passages processed in Fallback Mode, distinguished from canonical copy errors to preserve learning signal fidelity.
 _Avoid_: Fallback diff, correction type
 
 **Sequential Cursor**:
-The position tracker in the matn source file during matching. Advances as segments are matched, with forward look-ahead and full-range look-behind to handle paragraph skips and sentence-by-sentence re-reads.
+The active reading position tracked within the Matn Source during alignment, advancing across matched passages with forward look-ahead and full-range look-behind for skips and re-reads.
 _Avoid_: Read pointer, position marker
 
 **Markdown Leakage**:
-A failure mode where an LLM agent interprets inline formatting (like backticks or code fences) in prompt instructions as literal text requirements and outputs them into the generated document. Addressed by globally stripping non-semantic syntax in export scripts and removing them from positive prompt examples.
+A transcription failure mode in which non-semantic markup characters from formatting instructions (such as backticks or code fences) appear literally in the produced lecture text.
 _Avoid_: Prompt pollution, syntax leakage, literal backticks
 
 **Numbered Lecture Stem**:
-A lecture file naming convention that uses mirrored sequential lecture numbers instead of a Gregorian date (`YYYY-MM-DD`), structured as `[N]-[subject]_[N]` (e.g., `17-فقه_البيوع_17`). Matched across `01_Matn_Sources/` and `02_Raw_Inputs/` by mirrored integer identifiers and canonical keyword tokens.
+A sequential lecture identifier used for undated courses instead of a Gregorian calendar date, pairing mirrored lecture numbers with the course's canonical keyword token to align a lecture's raw draft and Matn Source.
 _Avoid_: Date stem, unnumbered lecture, arbitrary filename
 
 **Lecture Identity**:
-A consolidated domain entity encapsulating the core identifying primitives of a lecture (`date`, `lecture_number`, `keyword`, `subject_name`, `stem`, `audio_file`). Replaces dispersed data clumps across export and training pipelines, providing unified resolution of header lines, canonical names, and cross-directory stem matching.
+The canonical identifying record of a single lecture — combining its date or sequential lecture number, course keyword, canonical subject name, and stem — that unifies document headers, course routing, and artifact pairing.
 _Avoid_: Identity primitives, metadata tuple, stem dict
 
 **Known Cue**:
-A Sheikh utterance pattern that reliably signals an inaudible student turn. When detected at a paragraph boundary, it triggers proactive insertion of `طالب: صوت غير مسموع.`. Maintained in the Known Cue List and refined via the Diff Loop.
+A Sheikh utterance pattern that reliably signals an inaudible student turn, triggering proactive insertion of طالب: صوت غير مسموع. at a thought boundary and refined continuously via the Diff Loop.
 _Avoid_: Trigger phrase, prompt word, signal
 
 **Rhetorical Suffix**:
-A sentence-final particle (`ها؟`, `إيه؟`) the Sheikh uses as a teaching device to prompt class engagement, not as a genuine student-turn boundary. Excluded from Known Cue nomination by suffix filtering in the Diff Loop.
+A sentence-final particle (ها؟ or إيه؟) the Sheikh uses as a pedagogical device to prompt class engagement rather than a genuine student-turn boundary, excluded from Known Cue nomination in the Diff Loop.
 _Avoid_: Excluded cue, blacklisted cue, suppressed phrase
 
 **Anchor Expiry**:
@@ -61,7 +61,7 @@ Decay of a bolded Matn block's reference status after an extended stretch of com
 _Avoid_: Distant bolding, page-distance rule, re-bold threshold
 
 **Attendee Anonymization**:
-Substitution of `فلان` for any live lecture participant's personal name across all grammatical positions while retaining titles, kunyas, classical textbook placeholders, and historical figures.
+Substitution of فلان for any live lecture participant's personal name across all grammatical positions while retaining titles, kunyas, classical textbook placeholders, and historical figures.
 _Avoid_: Student masking, vocative replacement, name redaction
 
 **Echoed Student Turn**:
